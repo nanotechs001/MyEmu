@@ -1,0 +1,13 @@
+.DS_Store
+
+# Build output; the app and installers are rebuilt with MyEmu/scripts/build-app.sh and make-dmg.sh
+MyEmu/.build/
+MyEmu/.swiftpm/
+MyEmu/build.noindex/
+
+# Installers (MuMu's, kept locally for reference, and our own builds)
+*.dmg
+
+# Windows phase-0 test output (sent by hand, may name the machine)
+MyEmuWindows/phase0/phase0-report-*.txt
+MyEmuWindows/phase0/phase0-engine.log
