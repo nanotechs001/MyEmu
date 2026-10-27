@@ -30,11 +30,11 @@ $Report = Join-Path $PSScriptRoot ('phase0-report-' + (Get-Date -Format 'yyyyMMd
 
 # Pinned to the versions MyEmu is tested with on the Mac; SHA-1 values from Google's SDK index.
 $Packages = @(
-    @{ Name = 'adb (platform-tools 37.0.1)'; Sha1 = 'e03e78b1d80b396f1c3358e31251cb31740e1110'
+    @{ Name = 'adb (platform-tools 37.0.1)'; Revision = '37.0.1'; Sha1 = 'e03e78b1d80b396f1c3358e31251cb31740e1110'
        Folder = 'platform-tools'; Url = "$Repo/platform-tools_r37.0.1-win.zip" },
-    @{ Name = 'Android emulator engine 37.2.12'; Sha1 = '488ed747e82de7e9bb5247becd1ac043c7e5e85d'
+    @{ Name = 'Android emulator engine 37.2.12'; Revision = '37.2.12'; Sha1 = '488ed747e82de7e9bb5247becd1ac043c7e5e85d'
        Folder = 'emulator'; Url = "$Repo/emulator-windows_x64-16428233.zip" },
-    @{ Name = 'Android 15 with Google Play (x86-64)'; Sha1 = '2f0054868e6aab3c098acd3decba17a82aed4176'
+    @{ Name = 'Android 15 with Google Play (x86-64)'; Revision = '9'; Sha1 = '2f0054868e6aab3c098acd3decba17a82aed4176'
        Folder = 'system-images\android-35\google_apis_playstore\x86_64'
        Url = "$Repo/sys-img/google_apis_playstore/x86_64-35_r09.zip" }
 )
@@ -50,8 +50,15 @@ function Fail([string]$Text) {
     exit 1
 }
 
+# Runs a program with its stderr dropped. Under 'Stop', Windows PowerShell 5.1 turns any redirected
+# stderr line into a terminating error (adb's "daemon not running; starting now"), so 'Continue' here.
+function Native([string]$Exe, [string[]]$Arguments) {
+    $ErrorActionPreference = 'Continue'
+    & $Exe @Arguments 2>$null
+}
+
 function AdbShell([string]$Command) {
-    $out = & $Adb -s $Serial shell $Command 2>$null
+    $out = Native $Adb '-s', $Serial, 'shell', $Command
     return ($out | Out-String).Trim()
 }
 
@@ -73,9 +80,17 @@ if ([Environment]::Is64BitOperatingSystem -eq $false) { Fail 'needs 64-bit Windo
 # ---------------------------------------------------------------------------------------------------
 Say ''
 Say '=== Android packages'
-$missing = @($Packages | Where-Object { -not (Test-Path (Join-Path $Sdk "$($_.Folder)\source.properties")) })
+# The version in a package folder, if any. Android Studio shares this SDK folder, so another version
+# of a package can already be there; it gets replaced by the pinned one.
+function InstalledRevision($Package) {
+    $props = Join-Path $Sdk "$($Package.Folder)\source.properties"
+    if (Test-Path $props) { (Get-Content $props | Where-Object { $_ -match '^Pkg\.Revision=' }) -replace '^Pkg\.Revision=', '' }
+}
+$missing = @($Packages | Where-Object { (InstalledRevision $_) -ne $_.Revision })
 foreach ($p in $Packages) {
-    if ($missing -notcontains $p) { Say "Already installed: $($p.Name)" }
+    $have = InstalledRevision $p
+    if ($have -eq $p.Revision) { Say "Already installed: $($p.Name)" }
+    elseif ($have) { Say "Found $($p.Folder) $have; it will be replaced by $($p.Name)" }
 }
 if ($missing.Count -gt 0) {
     if ($free -lt 15) { Fail "needs about 15 GB free on $($env:LOCALAPPDATA.Substring(0, 2)); $free GB is free." }
@@ -108,6 +123,7 @@ if ($missing.Count -gt 0) {
         $answer = Read-Host 'Do you accept these Google license agreements? [y/N]'
         if ($answer -notmatch '^[Yy]') { Fail 'licenses not accepted; nothing was installed.' }
         Say 'Google licenses accepted.'
+        if (Test-Path $Adb) { Native $Adb 'kill-server' } # a running adb.exe can't be replaced
 
         foreach ($p in $missing) {
             Say "Downloading $($p.Name)..."
@@ -179,7 +195,7 @@ hw.keyboard=yes
 hw.lcd.density=240
 hw.lcd.height=900
 hw.lcd.width=1600
-hw.ramSize=8192M
+hw.ramSize=8192
 image.sysdir.1=system-images\android-35\google_apis_playstore\x86_64\
 showDeviceFrame=no
 tag.id=google_apis_playstore
@@ -195,9 +211,14 @@ $feature = if ($Renderer -eq 'Vulkan') { 'GuestAngle' } else { '-GuestAngle' }
 $engineLog = Join-Path $PSScriptRoot 'phase0-engine.log'
 $started = Get-Date
 # Google's own window for now (MyEmu for Windows comes after this test): you play in it.
+# Android's display and the game run at this PC's fastest screen refresh, as MyEmu does on the Mac;
+# without -vsync-rate Android's display runs at 60 Hz.
+$Hz = (Get-CimInstance Win32_VideoController | Measure-Object CurrentRefreshRate -Maximum).Maximum
+if (-not $Hz -or $Hz -lt 60) { $Hz = 60 }
 $engine = Start-Process -FilePath $Emulator -PassThru -RedirectStandardOutput $engineLog `
-    -ArgumentList @('-avd', 'myemu', '-gpu', 'host', '-feature', $feature, '-no-snapshot-save', '-no-boot-anim', '-port', '5554')
-& $Adb wait-for-device 2>$null
+    -ArgumentList @('-avd', 'myemu', '-gpu', 'host', '-feature', $feature, '-vsync-rate', "$Hz",
+        '-no-snapshot-save', '-no-boot-anim', '-port', '5554')
+Native $Adb 'wait-for-device'
 $booted = $false
 for ($i = 0; $i -lt 180 -and -not $booted; $i++) {
     if ($engine.HasExited) { Fail "the engine exited during boot (see $engineLog)." }
@@ -206,15 +227,23 @@ for ($i = 0; $i -lt 180 -and -not $booted; $i++) {
 }
 if (-not $booted) { Fail "Android didn't finish booting in 6 minutes (see $engineLog)." }
 Say "Booted in $([math]::Round(((Get-Date) - $started).TotalSeconds)) s"
+# As MyEmu does at every boot: the guest graphics driver otherwise logs 2 lines per frame from the
+# game's render thread (stutters on the Mac), and the Vulkan renderer gets ANGLE's clear workaround.
+$null = AdbShell 'setprop log.tag.MESA W'
+$null = AdbShell "settings put system peak_refresh_rate $Hz.0; settings put system min_refresh_rate $Hz.0"
+$null = AdbShell "cmd game set --fps $Hz com.com.Xerion" # the test game plays at full rate before measuring too
+Say "Display: $Hz Hz"
+if ($Renderer -eq 'Vulkan') { $null = AdbShell 'setprop debug.angle.feature_overrides_enabled preferDrawClearOverVkCmdClearAttachments' }
+Say "Android RAM: $(AdbShell 'grep MemTotal /proc/meminfo')"
 $abis = AdbShell 'getprop ro.product.cpu.abilist'
 Say "Android CPU types: $abis"
 Say "ARM translation: $(AdbShell 'getprop ro.dalvik.vm.native.bridge')"
 if ($abis -notmatch 'arm64-v8a') {
     Say 'WARNING: this Android can''t run ARM apps; Xerion and Conquer won''t install or start.'
 }
-Say "Renderer: $(AdbShell 'dumpsys SurfaceFlinger | grep -m1 GLES')"
+Say "Renderer: $(AdbShell 'dumpsys SurfaceFlinger | grep -m1 GLES:')"
 Get-Content $engineLog -ErrorAction SilentlyContinue |
-    Select-String -Pattern 'Graphics Adapter|GL_RENDERER|Vulkan|ANGLE|accel' |
+    Select-String -Pattern 'emulator version|Graphics Adapter|Graphics API Version|GuestAngle|accelerator' |
     Select-Object -First 8 | ForEach-Object { Say "engine: $($_.Line.Trim())" }
 
 # ---------------------------------------------------------------------------------------------------
@@ -223,21 +252,25 @@ function Measure-Game {
     $package = if ($top -match 'u0 ([^/ ]+)/') { $Matches[1] } else { 'unknown' }
     Say ''
     Say "=== Measuring $package for $Seconds s ($Renderer)"
-    $null = AdbShell 'settings put system peak_refresh_rate 120.0; settings put system min_refresh_rate 120.0'
-    $null = AdbShell "cmd game set --fps 120 $package"
-    $null = AdbShell 'dumpsys SurfaceFlinger --timestats -clear -enable'
+    # Android 15 holds games at 60 fps; the game's own game-mode fps takes precedence.
+    $null = AdbShell "cmd game set --fps $Hz $package"
     $qemu = Get-Process | Where-Object { $_.ProcessName -like 'qemu-system*' } | Select-Object -First 1
-    $cpuStart = if ($qemu) { $qemu.TotalProcessorTime.TotalSeconds } else { 0 }
     $gpuSamples = @()
     $smi = Get-Command nvidia-smi.exe -ErrorAction SilentlyContinue
-    for ($s = 0; $s -lt $Seconds; $s++) {
+    $null = AdbShell 'dumpsys SurfaceFlinger --timestats -clear -enable'
+    # Timed, not counted: each nvidia-smi call adds a few hundred ms to the 1 s sleeps.
+    $clock = [Diagnostics.Stopwatch]::StartNew()
+    $cpuStart = if ($qemu) { $qemu.TotalProcessorTime.TotalSeconds } else { 0 }
+    while ($clock.Elapsed.TotalSeconds -lt $Seconds) {
         if ($smi) {
-            $util = & nvidia-smi.exe --query-gpu=utilization.gpu --format=csv,noheader,nounits 2>$null
+            $util = Native 'nvidia-smi.exe' '--query-gpu=utilization.gpu', '--format=csv,noheader,nounits'
             if ($util) { $gpuSamples += [int](($util | Select-Object -First 1).Trim()) }
         }
         Start-Sleep -Seconds 1
     }
     $stats = AdbShell 'dumpsys SurfaceFlinger --timestats -dump'
+    $elapsed = $clock.Elapsed.TotalSeconds
+    $cpuUsed = if ($qemu) { $qemu.Refresh(); $qemu.TotalProcessorTime.TotalSeconds - $cpuStart } else { 0 }
     $null = AdbShell 'dumpsys SurfaceFlinger --timestats -disable'
     # Same measure as the Mac's stress test: frames, and frames that took 25-39 ms and 40 ms or more.
     $line = ($stats -split "`n" | Select-String -Pattern 'presentToPresent histogram' -Context 0, 1 | Select-Object -First 1)
@@ -251,14 +284,13 @@ function Measure-Game {
                 if ($ms -ge 40 -and $n -gt 0) { $big += $n; $slow += $ms }
             }
         }
-        Say ("fps {0:N0} | 25-39 ms: {1} | 40 ms or more: {2} [{3}]" -f ($frames / $Seconds), $mid, $big, ($slow -join ' '))
+        Say ("fps {0:N0} | 25-39 ms: {1} | 40 ms or more: {2} [{3}]" -f ($frames / $elapsed), $mid, $big, ($slow -join ' '))
     } else {
         Say 'fps: no frame statistics (is the game drawing?)'
     }
     if ($qemu) {
-        $qemu.Refresh()
         $cores = [Environment]::ProcessorCount
-        $used = ($qemu.TotalProcessorTime.TotalSeconds - $cpuStart) / $Seconds * 100
+        $used = $cpuUsed / $elapsed * 100
         Say ("Engine CPU: {0:N0}% of one thread ({1:N0}% of all {2} threads)" -f $used, ($used / $cores), $cores)
     }
     if ($gpuSamples.Count -gt 0) {
@@ -269,8 +301,10 @@ function Measure-Game {
     }
     $gamePid = AdbShell "pidof $package" # not $pid: that's PowerShell's own (read-only) process id
     if ($gamePid) {
-        $threads = AdbShell "top -H -b -n 2 -d 3 -p $gamePid -o TID,%CPU"
-        $busiest = ($threads -split "`n" | Where-Object { $_ -match '^\s*\d+\s+[\d.]+' } | Select-Object -Last 15 |
+        $threads = AdbShell "top -H -b -n 2 -d 3 -p $gamePid -o TID,%CPU,CMD"
+        # The second sample (after the last TID header): the first one's %CPU is averaged since start.
+        $last = ($threads -split '(?m)^.*\bTID\b.*$')[-1]
+        $busiest = ($last -split "`n" | Where-Object { $_ -match '^\s*\d+\s+[\d.]+' } |
             Sort-Object { [double](($_.Trim() -split '\s+')[1]) } -Descending | Select-Object -First 1)
         if ($busiest) { Say "Game's busiest thread: $($busiest.Trim()) (% of one Android CPU)" }
     }
