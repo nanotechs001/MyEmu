@@ -200,8 +200,13 @@ waiting for the host to drain the ring ~14%, ANGLE 19%, Vulkan encoder 18%), gam
   kernel 12% (`read_hpet` 10%), 65% attributed to `[goldfish_address_space]` (non-executable mapping,
   so probably misattributed; unresolved).
 - The engine boots x86 Android with `clocksource=pit`: the guest clock is the emulated HPET (every
-  read traps). Forcing `tsc=reliable clocksource=tsc` (`-qemu -append`) boots on TSC but the display
-  stops updating, so it could not be measured.
+  read traps); plain `clocksource=tsc` is rejected by the kernel under WHPX. Forcing
+  `tsc=reliable clocksource=tsc` (`-qemu -append`) boots on TSC with correct wall time, but timers
+  misbehave: touch input hangs and Xerion's start screen drops 158 → 17 fps. Not the fix; the clock
+  isn't what limits the crowded town (same thread draws the start screen at 158 fps on HPET).
+- MuMu (instance 1, observed from adb): runs on the same Hyper-V (`hyperv_enabled: true` for every
+  instance), guest clock `kvm-clock` (paravirtual, from its VirtualBox-based VMM), own `/dev/vaddress`
+  graphics device and no goldfish devices, kernel reports `aarch64` to apps, no simpleperf.
 - Engine setup notes: `hw.ramSize` must be plain MB (`8192M` gave 2560 MB on 36.6.11; 37.2.12 untested with `M`);
   without `-vsync-rate` Android's display is 60 Hz.
 - `android_showOpenglesWindow` is exported on Windows too (`emulator/lib64/libandroid-emu-shared.dll`).
