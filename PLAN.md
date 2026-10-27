@@ -181,6 +181,35 @@ waiting for the host to drain the ring ~14%, ANGLE 19%, Vulkan encoder 18%), gam
   with its own `vaddress` ring device. Not reachable without our own engine build.
 - Performance drawer shows an Engine section with live status (direct display / fallback, engine threads on fast cores).
 
+## Windows phase 0 (i5-14500HX, RTX 4050, WHPX, 2026-10-27)
+
+`MyEmuWindows/phase0/Test-MyEmuWindows.ps1`, engine 37.2.12, 165 Hz, Xerion Online in a crowded WindPlain (441,389):
+
+| Setup | fps | Game's GLThread | NVIDIA GPU |
+|---|---|---|---|
+| Android 15 Play image, Vulkan / OpenGL, `libndk_translation` | 7 / 7 | 98.6% | 14% / 33% |
+| Android 12L google_apis, OpenGL, `libndk_translation` | 8–9 | 99% | 34–37% |
+| same, engine pinned to performance cores | 8 | 99% | 34% |
+| MuMu 12 (Android 12, Intel Houdini, own VMM and graphics path) | 35 | 98% | 39% |
+
+- The game is arm64-only; on x86 its single render thread is the limit in every setup, not the GPU.
+  Vulkan vs OpenGL and performance vs efficiency cores make no difference.
+- MuMu's Houdini is "Intel Bridge Technology for Netease internal evaluation only"; copied into
+  Google's image it initializes, then stops with `Fatal error (ID:0x019001d8)`. Not usable, not shippable.
+- simpleperf on GLThread (Android 12L): `libndk_translation` itself ~1%, unresolved code 16%, guest
+  kernel 12% (`read_hpet` 10%), 65% attributed to `[goldfish_address_space]` (non-executable mapping,
+  so probably misattributed; unresolved).
+- The engine boots x86 Android with `clocksource=pit`: the guest clock is the emulated HPET (every
+  read traps). Forcing `tsc=reliable clocksource=tsc` (`-qemu -append`) boots on TSC but the display
+  stops updating, so it could not be measured.
+- Engine setup notes: `hw.ramSize` must be plain MB (`8192M` gave 2560 MB on 36.6.11; 37.2.12 untested with `M`);
+  without `-vsync-rate` Android's display is 60 Hz.
+- `android_showOpenglesWindow` is exported on Windows too (`emulator/lib64/libandroid-emu-shared.dll`).
+  MuMu Windows doesn't inject: its VMM loads its own gfxstream fork (`libRenderer.dll`) and its Qt
+  window passes its HWND over RPC (`RendererRPC_createCanvasEx`, `main_canvas_parent`).
+
+Open: whether the 4–5× gap to MuMu is translation or the guest↔host path (clock, graphics transport).
+
 ## Requirements / risks
 - Downloads ~3 GB from Homebrew and Google (dl.google.com); accepting the Android SDK license.
 - Engine is Apache 2.0 / GPLv2 (QEMU) — fine for personal use; check licenses before distributing.
