@@ -129,6 +129,10 @@ extension Engine {
     /// missing file stops the app from launching — so a game with no library runs at normal speed
     /// instead of failing to open. `package` must pass `AndroidWatch.isValidPackage`.
     static func setGameSpeed(_ speed: Double, package: String, serial: String) async throws {
+        // Install on demand: the boot-time install can be missed (e.g. a slow custom-model boot), and
+        // without the library the wrap below is skipped and speed silently stays normal. Cheap when the
+        // library is already there (just a hash check); a remount only happens when it must be pushed.
+        if speed != 1.0 { _ = try? await installSpeedLibrary(serial: serial) }
         let present = try await adb(serial: serial,
             ["shell", "ls \(AndroidCommands.speedLibrary) >/dev/null 2>&1 && echo yes"]).contains("yes")
         let scaling = speed != 1.0 && present
