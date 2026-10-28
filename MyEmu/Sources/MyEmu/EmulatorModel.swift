@@ -321,20 +321,27 @@ final class EmulatorModel {
     private func watchForegroundApp(serial: String) async {
         while !Task.isCancelled {
             do {
+                // The event stream reports only future app switches, so a game already in front when we
+                // attach is never seen — without this, speed/FPS/keymaps never apply on an instance you
+                // didn't switch apps in (e.g. every instance after the first). Read the current app once.
+                if let package = try? await Engine.foregroundApp(serial: serial) { foregroundDidChange(package) }
                 for try await line in AndroidWatch.lines(serial: serial, command: AndroidWatch.foregroundCommand) {
-                    if let package = AndroidWatch.foregroundPackage(fromEvent: line) {
-                        gameKeys.appDidChange(package)
-                        autoPots.appDidChange(package)
-                        scheduleTypingCheck() // the new app may open with a text box focused
-                        applyAndroidRate() // includes lifting Android's 60 fps default for games
-                        applyGameSpeed()
-                    }
+                    if let package = AndroidWatch.foregroundPackage(fromEvent: line) { foregroundDidChange(package) }
                 }
             } catch {
                 log.error("Foreground-app watch ended: \(error.localizedDescription)")
             }
             try? await Task.sleep(for: .seconds(2)) // engine restarting; cancellation ends the loop
         }
+    }
+
+    /// The foreground app changed, or was read when the watcher attached: refresh everything keyed to it.
+    private func foregroundDidChange(_ package: String) {
+        gameKeys.appDidChange(package)
+        autoPots.appDidChange(package)
+        scheduleTypingCheck() // the new app may open with a text box focused
+        applyAndroidRate() // includes lifting Android's 60 fps default for games
+        applyGameSpeed()
     }
 
     /// Mac-keyboard-only and Lightweight Android, as currently chosen (render scale rides along

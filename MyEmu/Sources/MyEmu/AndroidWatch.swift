@@ -6,6 +6,9 @@ enum AndroidWatch {
     /// Event-driven: Android logs one line per app switch. `-T 1` only skips old lines: the newest
     /// line in the buffer is almost always another tag, which `-s` then drops, so nothing replays.
     static let foregroundCommand = "logcat -b events -v raw -T 1 -s wm_set_resumed_activity"
+    /// One-shot read of the app already in front, for priming the watcher (the event stream above only
+    /// reports switches made after it attaches). Parsed by `foregroundPackage(fromDump:)`.
+    static let foregroundProbe = "dumpsys activity activities 2>/dev/null | grep -m1 topResumedActivity"
     /// Android 15 logs each keyboard show/hide *request* (also when no on-screen keyboard is drawn
     /// because you type on the Mac). Requests aren't the state (games send hide requests Android
     /// refuses while their text box stays open), so each one only triggers a `typingProbe`. Requests
@@ -26,6 +29,17 @@ enum AndroidWatch {
         guard fields.count >= 2, let slash = fields[1].firstIndex(of: "/") else { return nil }
         let package = String(fields[1][..<slash])
         return isValidPackage(package) ? package : nil
+    }
+
+    /// "…topResumedActivity=ActivityRecord{hash u0 com.example.game/.MainActivity t42}" → "com.example.game".
+    /// The dump token is "package/activity"; the first valid one wins.
+    static func foregroundPackage(fromDump line: String) -> String? {
+        for field in line.split(whereSeparator: { " \t{}\r\n".contains($0) }) {
+            guard let slash = field.firstIndex(of: "/") else { continue }
+            let package = String(field[..<slash])
+            if isValidPackage(package) { return package }
+        }
+        return nil
     }
 
     /// "I/ImeTracker(…): <app>:<id>: onRequestShow …" or "… onRequestHide …".

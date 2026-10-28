@@ -139,6 +139,12 @@ extension Engine {
         _ = try await adb(serial: serial, ["shell", AndroidCommands.gameSpeed(scaling ? speed : 1.0, package: package)])
     }
 
+    /// The package of the app currently in front, read once to prime the foreground watcher (whose
+    /// event stream only reports later switches). nil when nothing suitable is resumed (e.g. launcher).
+    static func foregroundApp(serial: String) async throws -> String? {
+        AndroidWatch.foregroundPackage(fromDump: try await adb(serial: serial, ["shell", AndroidWatch.foregroundProbe]))
+    }
+
     /// The phone name shown in Android's Settings. `name` must be a validated `DeviceIdentity.marketName`.
     static func setDeviceName(_ name: String, serial: String) async throws {
         _ = try await adb(serial: serial, ["wait-for-device", "shell",
