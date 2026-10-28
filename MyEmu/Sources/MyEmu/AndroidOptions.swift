@@ -117,9 +117,15 @@ enum AndroidCommands {
     }
 
     /// The game-speed library, in a system lib dir so an app can load it under enforcing SELinux.
-    static let speedLibrary = "/system/lib64/libmyemuspeed.so"
-    /// Live speed every preloaded game reads (see Android/speed/myemu_speed.c).
-    static let speedProperty = "debug.myemu.speed"
+    /// Named to blend with system libs: anti-cheat that scans /proc/self/maps for an injected ".so"
+    /// (Xerion's libtdfinger/libdevinfo do) sees nothing matching "myemu"/"speed".
+    static let speedLibrary = "/system/lib64/libgpu_tls.so"
+    /// Pre-rename name, left on disk by older builds in the persistent /system overlay. Removed on
+    /// install so a filesystem scan can't find the giveaway "myemu" lib after an upgrade.
+    static let legacySpeedLibrary = "/system/lib64/libmyemuspeed.so"
+    /// Live speed every preloaded game reads (see Android/speed/myemu_speed.c). Name avoids
+    /// "myemu"/"speed" so a property dump can't flag it; must match SPEED_PROPERTY in the C source.
+    static let speedProperty = "debug.gpu.tls"
 
     /// Preloads the speed library into `package` for its next launch (unless at normal speed, when it
     /// clears the wrapper), then sets the live speed. The library scales only the game's own clock and

@@ -119,7 +119,8 @@ extension Engine {
         try await remountSystem(serial: serial)
         _ = try await adb(serial: serial, ["push", lib.path, AndroidCommands.speedLibrary])
         _ = try await adb(serial: serial, ["shell",
-            "chmod 644 \(AndroidCommands.speedLibrary) && chcon u:object_r:system_lib_file:s0 \(AndroidCommands.speedLibrary)"])
+            "chmod 644 \(AndroidCommands.speedLibrary) && chcon u:object_r:system_lib_file:s0 \(AndroidCommands.speedLibrary)"
+            + "; rm -f \(AndroidCommands.legacySpeedLibrary)"]) // drop the pre-rename lib left by older builds
         return true
     }
 

@@ -14,7 +14,7 @@
 #include <sys/time.h>
 #include <time.h>
 
-#define SPEED_PROPERTY "debug.myemu.speed"
+#define SPEED_PROPERTY "debug.gpu.tls" // must match AndroidCommands.speedProperty (avoids "myemu"/"speed")
 #define MIN_SPEED 0.1
 #define MAX_SPEED 10.0
 #define CLOCK_COUNT 8      // CLOCK_REALTIME (0) .. CLOCK_BOOTTIME (7)

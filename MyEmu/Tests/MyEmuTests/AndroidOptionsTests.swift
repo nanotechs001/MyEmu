@@ -34,12 +34,13 @@ import Testing
     #expect(AndroidCommands.animations(true).hasSuffix("animator_duration_scale 1"))
 }
 
+@MainActor
 @Test func gameSpeedWrapsOnlyWhenNotNormalAndSetsTheLiveProperty() {
     let fast = AndroidCommands.gameSpeed(2.0, package: "com.com.Xerion")
-    #expect(fast == "setprop wrap.com.com.Xerion LD_PRELOAD=/system/lib64/libmyemuspeed.so; setprop debug.myemu.speed 2.00")
+    #expect(fast == "setprop wrap.com.com.Xerion LD_PRELOAD=/system/lib64/libgpu_tls.so; setprop debug.gpu.tls 2.00")
     let normal = AndroidCommands.gameSpeed(1.0, package: "com.com.Xerion")
-    #expect(normal == "setprop wrap.com.com.Xerion ''; setprop debug.myemu.speed 1.00") // clears the wrapper
-    #expect(AndroidCommands.gameSpeed(1.5, package: "a.b").hasSuffix("debug.myemu.speed 1.50"))
+    #expect(normal == "setprop wrap.com.com.Xerion ''; setprop debug.gpu.tls 1.00") // clears the wrapper
+    #expect(AndroidCommands.gameSpeed(1.5, package: "a.b").hasSuffix("debug.gpu.tls 1.50"))
     #expect(AndroidOptions.gameSpeeds.first == 1.0) // normal is always offered
     #expect(AndroidOptions.gameSpeeds.last == 10.0) // capped at 10x (the library's max)
     #expect(AndroidOptions.gameSpeeds.allSatisfy { $0 >= 0.1 && $0 <= 10 }) // within the library's clamp
