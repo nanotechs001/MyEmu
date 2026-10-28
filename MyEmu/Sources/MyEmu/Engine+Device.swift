@@ -123,10 +123,15 @@ extension Engine {
         return true
     }
 
-    /// Preloads the speed library into `package` for its next launch and sets the live speed.
-    /// `package` must pass `AndroidWatch.isValidPackage` (it goes into a shell command).
+    /// Preloads the speed library into `package` for its next launch and sets the live speed. Points
+    /// `wrap.` at the library only when it's actually present (installed at boot) — a wrapper naming a
+    /// missing file stops the app from launching — so a game with no library runs at normal speed
+    /// instead of failing to open. `package` must pass `AndroidWatch.isValidPackage`.
     static func setGameSpeed(_ speed: Double, package: String, serial: String) async throws {
-        _ = try await adb(serial: serial, ["shell", AndroidCommands.gameSpeed(speed, package: package)])
+        let present = try await adb(serial: serial,
+            ["shell", "ls \(AndroidCommands.speedLibrary) >/dev/null 2>&1 && echo yes"]).contains("yes")
+        let scaling = speed != 1.0 && present
+        _ = try await adb(serial: serial, ["shell", AndroidCommands.gameSpeed(scaling ? speed : 1.0, package: package)])
     }
 
     /// The phone name shown in Android's Settings. `name` must be a validated `DeviceIdentity.marketName`.

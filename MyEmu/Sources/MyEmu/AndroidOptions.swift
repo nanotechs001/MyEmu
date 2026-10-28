@@ -13,11 +13,12 @@ final class AndroidOptions {
 
     private enum Key {
         static let renderScale = "renderScale", lightweight = "lightweightAndroid", keyboardOnly = "macKeyboardOnly"
-        static let guestAngle = "guestAngle", superLight = "superLight", gameSpeed = "gameSpeed"
+        static let guestAngle = "guestAngle", superLight = "superLight"
     }
 
-    /// Offered time-scaling steps; the native library clamps to 0.1–10. 1.0 is normal speed.
-    static let gameSpeeds = [1.0, 1.5, 2.0, 3.0, 5.0]
+    /// Offered game-speed steps; the native library clamps to 0.1–10. 1.0 is normal. Per instance
+    /// (stored on EmulatorModel), since each window can run a different game at a different speed.
+    static let gameSpeeds = [1.0, 1.5, 2.0, 3.0, 5.0, 10.0]
 
     /// Super Light: games as light as possible, looks don't matter (farming, many instances).
     static let superLightRenderScale = 0.1
@@ -51,12 +52,6 @@ final class AndroidOptions {
         didSet { save(guestAngle, Key.guestAngle) }
     }
 
-    /// How fast the current game's own clock runs (1.0 = normal). Injected per game; custom-model
-    /// profile only. Takes effect when the game next starts, then changes apply live.
-    var gameSpeed: Double {
-        didSet { save(gameSpeed, Key.gameSpeed) }
-    }
-
     /// Told after any change so open instances can apply it.
     @ObservationIgnored var onChange: (@MainActor () -> Void)?
 
@@ -70,8 +65,6 @@ final class AndroidOptions {
         macKeyboardOnly = defaults.bool(forKey: Key.keyboardOnly)
         guestAngle = defaults.bool(forKey: Key.guestAngle)
         superLight = defaults.bool(forKey: Key.superLight) // off unless chosen
-        let savedSpeed = defaults.double(forKey: Key.gameSpeed)
-        gameSpeed = Self.gameSpeeds.contains(savedSpeed) ? savedSpeed : 1.0
     }
 
     private func save(_ value: Any, _ key: String) {

@@ -49,7 +49,7 @@ final class EmulatorModel {
         static let fpsCap = "fpsCap", lowerFPSInBackground = "lowerFPSInBackground", showFPS = "showFPS"
         static let colorIntensity = "colorIntensity"
         static let profile = "deviceProfile", identity = "deviceIdentity"
-        static let phoneLine = "phoneLine", cutout = "cutout"
+        static let phoneLine = "phoneLine", cutout = "cutout", gameSpeed = "gameSpeed"
     }
 
     /// Which Android this window runs (its AVDs, port and profile).
@@ -123,6 +123,15 @@ final class EmulatorModel {
         }
     }
 
+    /// How fast this instance's current game runs (1.0 = normal). Per instance, so each window keeps
+    /// its own speed. Injected per game; custom-model profile only. Applies live to the running game.
+    var gameSpeed: Double {
+        didSet {
+            UserDefaults.standard.set(gameSpeed, forKey: instance.defaultsKey(DefaultsKey.gameSpeed))
+            applyGameSpeed()
+        }
+    }
+
     var selectedDrawer: Drawer? {
         didSet {
             autoPots.isPreviewing = selectedDrawer == .autoPots // live HP reading while its drawer is open
@@ -180,6 +189,8 @@ final class EmulatorModel {
             .flatMap { $0.problem == nil ? $0 : nil } ?? PhoneLine()
         (phoneLine, draftPhoneLine) = (savedLine, savedLine)
         cutout = defaults.string(forKey: instance.defaultsKey(DefaultsKey.cutout)).flatMap(CutoutStyle.init) ?? .none
+        let savedSpeed = defaults.double(forKey: instance.defaultsKey(DefaultsKey.gameSpeed))
+        gameSpeed = AndroidOptions.gameSpeeds.contains(savedSpeed) ? savedSpeed : 1.0
         screen.gameKeys = gameKeys
         screen.autoPots = autoPots
         screen.showsFPS = showFPS
@@ -188,9 +199,9 @@ final class EmulatorModel {
     }
 
     /// Forgets a deleted instance's own settings.
-    private static let instanceSettings = [DefaultsKey.profile, DefaultsKey.identity, DefaultsKey.phoneLine, DefaultsKey.cutout]
+    private static let instanceSettings = [DefaultsKey.profile, DefaultsKey.identity, DefaultsKey.phoneLine, DefaultsKey.cutout, DefaultsKey.gameSpeed]
 
-    /// A cloned instance starts with the original's profile, phone model, phone line and cutout.
+    /// A cloned instance starts with the original's profile, phone model, phone line, cutout and game speed.
     static func copySettings(from source: Instance, to target: Instance, defaults: UserDefaults = .standard) {
         for key in instanceSettings {
             if let value = defaults.object(forKey: source.defaultsKey(key)) {
@@ -351,7 +362,7 @@ final class EmulatorModel {
     private func applyGameSpeed() {
         guard profile == .customModel, let engine, let game = gameKeys.currentApp,
               AndroidWatch.isValidPackage(game) else { return }
-        let speed = AndroidOptions.shared.gameSpeed
+        let speed = gameSpeed
         let previous = speedTask
         speedTask = Task {
             await previous?.value
@@ -467,16 +478,19 @@ final class EmulatorModel {
                 } catch {
                     log.error("IMEI apply failed: \(error.localizedDescription)") // the model still applied
                 }
-                do {
-                    _ = try await Engine.installSpeedLibrary(serial: serial) // enables game speed; harmless if absent
-                } catch {
-                    log.error("Speed library install failed: \(error.localizedDescription)")
-                }
                 status = "Running"
                 androidReady = true
             } catch {
                 status = "Couldn't set the device model: \(error.localizedDescription)"
                 log.error("Device model apply failed: \(error.localizedDescription)")
+            }
+            // Custom-model has a writable system, so install the speed library now (one remount at
+            // boot), making game speed work on every instance without a remount on the hot path.
+            // Idempotent: skips when it's already there.
+            do {
+                _ = try await Engine.installSpeedLibrary(serial: serial)
+            } catch {
+                log.error("Speed library install failed: \(error.localizedDescription)")
             }
         }
     }

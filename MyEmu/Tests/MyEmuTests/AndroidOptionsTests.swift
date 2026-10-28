@@ -41,6 +41,7 @@ import Testing
     #expect(normal == "setprop wrap.com.com.Xerion ''; setprop debug.myemu.speed 1.00") // clears the wrapper
     #expect(AndroidCommands.gameSpeed(1.5, package: "a.b").hasSuffix("debug.myemu.speed 1.50"))
     #expect(AndroidOptions.gameSpeeds.first == 1.0) // normal is always offered
+    #expect(AndroidOptions.gameSpeeds.last == 10.0) // capped at 10x (the library's max)
     #expect(AndroidOptions.gameSpeeds.allSatisfy { $0 >= 0.1 && $0 <= 10 }) // within the library's clamp
 }
 

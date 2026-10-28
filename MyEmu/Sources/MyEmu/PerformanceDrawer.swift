@@ -74,7 +74,7 @@ struct PerformanceDrawer: View {
 
     private var speedSection: some View {
         DrawerSection("Game speed") {
-            Picker("Speed", selection: Binding(get: { options.gameSpeed }, set: { options.gameSpeed = $0 })) {
+            Picker("Speed", selection: Binding(get: { model.gameSpeed }, set: { model.gameSpeed = $0 })) {
                 ForEach(AndroidOptions.gameSpeeds, id: \.self) { speed in
                     Text(speed == 1 ? "Normal" : "\(speed.truncatingRemainder(dividingBy: 1) == 0 ? String(Int(speed)) : String(speed))×").tag(speed)
                 }
