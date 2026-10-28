@@ -1,0 +1,64 @@
+<Window x:Class="MyEmu.AutoPots.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="MyEmu AutoPots" Width="700" SizeToContent="Height" ResizeMode="CanMinimize" WindowStartupLocation="CenterScreen"
+        Background="#1E1F22" Foreground="#E6E6E6" FontSize="13">
+  <Window.Resources>
+    <Style TargetType="TextBlock"><Setter Property="Foreground" Value="#E6E6E6" /></Style>
+    <Style TargetType="RadioButton"><Setter Property="Foreground" Value="#E6E6E6" /><Setter Property="Margin" Value="0,0,14,0" /></Style>
+    <Style TargetType="Button"><Setter Property="Padding" Value="12,5" /><Setter Property="Margin" Value="0,0,8,0" /></Style>
+  </Window.Resources>
+  <StackPanel Margin="14">
+    <DockPanel>
+      <TextBlock VerticalAlignment="Center" Text="MuMu instance" />
+      <TextBox x:Name="InstanceBox" Width="36" Margin="8,0" Text="1" VerticalContentAlignment="Center" LostFocus="InstanceChanged" />
+      <TextBlock x:Name="ConnectionText" VerticalAlignment="Center" Foreground="#9AA0A6" TextTrimming="CharacterEllipsis" />
+    </DockPanel>
+
+    <!-- The instance's screen; drag the HP box, click elsewhere to place the potion dot. -->
+    <Border Margin="0,10" BorderBrush="#3A3D41" BorderThickness="1" HorizontalAlignment="Left">
+      <Canvas x:Name="Screen" Width="640" Height="430" Background="Black" ClipToBounds="True"
+              MouseLeftButtonDown="ScreenDown" MouseMove="ScreenMove" MouseLeftButtonUp="ScreenUp">
+        <Image x:Name="Preview" Width="640" Height="430" Stretch="Fill" />
+        <Rectangle x:Name="BoxRect" Stroke="#34C759" StrokeThickness="2" Visibility="Collapsed" />
+        <Ellipse x:Name="PotionDot" Width="14" Height="14" Fill="#34C759" Stroke="White" StrokeThickness="1.5" Visibility="Collapsed" />
+      </Canvas>
+    </Border>
+
+    <TextBlock x:Name="StatusText" FontSize="18" FontWeight="SemiBold" Text="Off." />
+    <TextBlock x:Name="MessageText" Margin="0,4,0,10" Foreground="#F2C94C" TextWrapping="Wrap" />
+
+    <WrapPanel Margin="0,0,0,10">
+      <TextBlock VerticalAlignment="Center" Margin="0,0,10,0" Text="Game view" />
+      <RadioButton x:Name="OrbView" Content="Orb" VerticalAlignment="Center" Checked="ViewChanged" />
+      <RadioButton x:Name="SimpleView" Content="Simple" VerticalAlignment="Center" Checked="ViewChanged" />
+    </WrapPanel>
+
+    <WrapPanel>
+      <Button x:Name="DetectButton" Content="Auto-detect (HP full)" Click="AutoDetect" />
+      <Button x:Name="TemplateButton" Content="Retake template" Click="RetakeTemplate" />
+      <Button x:Name="StartButton" Content="Start (F8)" Click="StartStop" FontWeight="SemiBold" />
+    </WrapPanel>
+
+    <Grid Margin="0,14,0,0">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="170" /><ColumnDefinition /><ColumnDefinition Width="60" />
+      </Grid.ColumnDefinitions>
+      <Grid.RowDefinitions>
+        <RowDefinition /><RowDefinition /><RowDefinition /><RowDefinition />
+      </Grid.RowDefinitions>
+      <TextBlock Grid.Row="0" Text="Readings before potting" VerticalAlignment="Center" />
+      <Slider x:Name="ConfirmSlider" Grid.Row="0" Grid.Column="1" Minimum="1" Maximum="10" IsSnapToTickEnabled="True" TickFrequency="1" Margin="0,4" ValueChanged="SettingChanged" />
+      <TextBlock Grid.Row="0" Grid.Column="2" Text="{Binding Value, ElementName=ConfirmSlider}" Margin="10,0" VerticalAlignment="Center" />
+      <TextBlock Grid.Row="1" Text="Taps per burst" VerticalAlignment="Center" />
+      <Slider x:Name="BurstSlider" Grid.Row="1" Grid.Column="1" Minimum="1" Maximum="10" IsSnapToTickEnabled="True" TickFrequency="1" Margin="0,4" ValueChanged="SettingChanged" />
+      <TextBlock Grid.Row="1" Grid.Column="2" Text="{Binding Value, ElementName=BurstSlider}" Margin="10,0" VerticalAlignment="Center" />
+      <TextBlock Grid.Row="2" Text="Press length (ms)" VerticalAlignment="Center" />
+      <Slider x:Name="PressSlider" Grid.Row="2" Grid.Column="1" Minimum="0" Maximum="500" IsSnapToTickEnabled="True" TickFrequency="10" Margin="0,4" ValueChanged="SettingChanged" />
+      <TextBlock Grid.Row="2" Grid.Column="2" Text="{Binding Value, ElementName=PressSlider}" Margin="10,0" VerticalAlignment="Center" />
+      <TextBlock Grid.Row="3" Text="Tap spread (px)" VerticalAlignment="Center" />
+      <Slider x:Name="RandomSlider" Grid.Row="3" Grid.Column="1" Minimum="0" Maximum="80" IsSnapToTickEnabled="True" TickFrequency="1" Margin="0,4" ValueChanged="SettingChanged" />
+      <TextBlock Grid.Row="3" Grid.Column="2" Text="{Binding Value, ElementName=RandomSlider}" Margin="10,0" VerticalAlignment="Center" />
+    </Grid>
+  </StackPanel>
+</Window>
