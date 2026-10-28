@@ -156,6 +156,7 @@ final class EmulatorModel {
     private(set) var notice: String?
     @ObservationIgnored private var identityTask: Task<Void, Never>?
     @ObservationIgnored private var optionsTask: Task<Void, Never>?
+    @ObservationIgnored private var speedTask: Task<Void, Never>?
 
     init(instance: Instance) {
         self.instance = instance
@@ -187,8 +188,19 @@ final class EmulatorModel {
     }
 
     /// Forgets a deleted instance's own settings.
+    private static let instanceSettings = [DefaultsKey.profile, DefaultsKey.identity, DefaultsKey.phoneLine, DefaultsKey.cutout]
+
+    /// A cloned instance starts with the original's profile, phone model, phone line and cutout.
+    static func copySettings(from source: Instance, to target: Instance, defaults: UserDefaults = .standard) {
+        for key in instanceSettings {
+            if let value = defaults.object(forKey: source.defaultsKey(key)) {
+                defaults.set(value, forKey: target.defaultsKey(key))
+            }
+        }
+    }
+
     static func removeSettings(of instance: Instance) {
-        for key in [DefaultsKey.profile, DefaultsKey.identity, DefaultsKey.phoneLine, DefaultsKey.cutout] {
+        for key in instanceSettings {
             UserDefaults.standard.removeObject(forKey: instance.defaultsKey(key))
         }
     }
@@ -302,6 +314,7 @@ final class EmulatorModel {
                         autoPots.appDidChange(package)
                         scheduleTypingCheck() // the new app may open with a text box focused
                         applyAndroidRate() // includes lifting Android's 60 fps default for games
+                        applyGameSpeed()
                     }
                 }
             } catch {
@@ -317,7 +330,8 @@ final class EmulatorModel {
         guard let serial = engine?.serial else { return }
         let options = AndroidOptions.shared
         var commands = [AndroidCommands.quietGraphicsLog, AndroidCommands.keepScreenOrientation, AndroidCommands.keyboardOnly(options.macKeyboardOnly),
-                        AndroidCommands.lightweight(options.lightweight), cutout.command]
+                        AndroidCommands.lightweight(options.effectiveLightweight), cutout.command,
+                        AndroidCommands.animations(!options.superLight)]
         if runningGuestAngle == true { commands.insert(AndroidCommands.angleWorkarounds, at: 0) } // before any game starts
         optionsTask?.cancel()
         optionsTask = Task {
@@ -328,6 +342,25 @@ final class EmulatorModel {
             }
         }
         applyAndroidRate()
+        applyGameSpeed()
+    }
+
+    /// Preloads the speed library into the current game and applies the chosen speed. Custom-model
+    /// only — the Play Store profile has no writable system to install the library into. Serialized
+    /// so quick changes land in order.
+    private func applyGameSpeed() {
+        guard profile == .customModel, let engine, let game = gameKeys.currentApp,
+              AndroidWatch.isValidPackage(game) else { return }
+        let speed = AndroidOptions.shared.gameSpeed
+        let previous = speedTask
+        speedTask = Task {
+            await previous?.value
+            do {
+                try await Engine.setGameSpeed(speed, package: game, serial: engine.serial)
+            } catch {
+                log.error("Could not set game speed: \(error.localizedDescription)")
+            }
+        }
     }
 
     /// Typing is only watched while game keys are live: it costs Android a little CPU twice a second.
@@ -433,6 +466,11 @@ final class EmulatorModel {
                     _ = try await Engine.applyGuestIMEI(phoneLine.imei, serial: serial)
                 } catch {
                     log.error("IMEI apply failed: \(error.localizedDescription)") // the model still applied
+                }
+                do {
+                    _ = try await Engine.installSpeedLibrary(serial: serial) // enables game speed; harmless if absent
+                } catch {
+                    log.error("Speed library install failed: \(error.localizedDescription)")
                 }
                 status = "Running"
                 androidReady = true
@@ -614,6 +652,7 @@ final class EmulatorModel {
     var androidFPS: Int? {
         guard let displayMaxFPS else { return nil }
         if isInBackground, lowerFPSInBackground { return min(Self.backgroundFPS, displayMaxFPS) }
+        if AndroidOptions.shared.superLight { return min(AndroidOptions.superLightFPS, displayMaxFPS) }
         return fpsCap == 0 ? displayMaxFPS : min(fpsCap, displayMaxFPS)
     }
 
@@ -627,7 +666,7 @@ final class EmulatorModel {
             do {
                 try await Engine.setAndroidRefreshRate(rate, serial: engine.serial)
                 if let game {
-                    try await Engine.setGameMode(fps: rate, renderScale: AndroidOptions.shared.renderScale,
+                    try await Engine.setGameMode(fps: rate, renderScale: AndroidOptions.shared.effectiveRenderScale,
                                                  package: game, serial: engine.serial)
                 }
             } catch {

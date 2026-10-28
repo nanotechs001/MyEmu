@@ -21,10 +21,27 @@ import Testing
     #expect(AndroidCommands.keyboardOnly(false) == "settings put secure show_ime_with_hard_keyboard 1")
 }
 
+@MainActor
 @Test func gameModeSetsFpsAndRenderScaleForGamesOnly() {
     let scaled = AndroidCommands.gameMode(fps: 180, renderScale: 0.85, package: "com.Tq.CQ2ClientAndroid")
     #expect(scaled == "cmd game list-modes com.Tq.CQ2ClientAndroid | grep -q 'available game modes: \\[[a-z]' && cmd game set --fps 180 --downscale 0.85 com.Tq.CQ2ClientAndroid; true")
     #expect(AndroidCommands.gameMode(fps: 60, renderScale: 1, package: "a.b").contains("--downscale disable"))
+    #expect(AndroidCommands.gameMode(fps: 60, renderScale: 0.1, package: "a.b").contains("--fps 60 --downscale 0.10 a.b"))
+    #expect(AndroidOptions.renderScales.last == 0.1)
+    #expect(AndroidOptions.renderScales.contains(AndroidOptions.superLightRenderScale))
+    #expect(AndroidCommands.animations(false) == "settings put global window_animation_scale 0; "
+        + "settings put global transition_animation_scale 0; settings put global animator_duration_scale 0")
+    #expect(AndroidCommands.animations(true).hasSuffix("animator_duration_scale 1"))
+}
+
+@Test func gameSpeedWrapsOnlyWhenNotNormalAndSetsTheLiveProperty() {
+    let fast = AndroidCommands.gameSpeed(2.0, package: "com.com.Xerion")
+    #expect(fast == "setprop wrap.com.com.Xerion LD_PRELOAD=/system/lib64/libmyemuspeed.so; setprop debug.myemu.speed 2.00")
+    let normal = AndroidCommands.gameSpeed(1.0, package: "com.com.Xerion")
+    #expect(normal == "setprop wrap.com.com.Xerion ''; setprop debug.myemu.speed 1.00") // clears the wrapper
+    #expect(AndroidCommands.gameSpeed(1.5, package: "a.b").hasSuffix("debug.myemu.speed 1.50"))
+    #expect(AndroidOptions.gameSpeeds.first == 1.0) // normal is always offered
+    #expect(AndroidOptions.gameSpeeds.allSatisfy { $0 >= 0.1 && $0 <= 10 }) // within the library's clamp
 }
 
 @Test func engineArgumentsPickTheRenderer() {

@@ -60,6 +60,26 @@ final class InstanceManager {
         return instance
     }
 
+    /// A new instance that's a copy of a stopped one: its Androids (apps, sign-ins, game data) and
+    /// its settings. Instant: the disks are APFS clones. Nil at the instance limit.
+    func clone(_ id: String) throws -> Instance? {
+        guard let source = list.instance(id: id), !openIDs.contains(id),
+              let copy = list.add(name: "\(source.name) copy") else { return nil }
+        var copied: [String] = []
+        do {
+            for profile in DeviceProfile.allCases where try Engine.cloneAvd(source.avd(for: profile), to: copy.avd(for: profile)) {
+                copied.append(copy.avd(for: profile))
+            }
+        } catch {
+            copied.forEach { try? Engine.deleteAvd($0) } // only what this clone made
+            list.remove(id: copy.id)
+            throw error
+        }
+        EmulatorModel.copySettings(from: source, to: copy)
+        list.save()
+        return copy
+    }
+
     func rename(_ id: String, to name: String) {
         list.rename(id: id, to: name)
         list.save()

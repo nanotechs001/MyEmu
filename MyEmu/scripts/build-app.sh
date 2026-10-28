@@ -38,6 +38,9 @@ for ext in png jpg jpeg webp; do
     [ -f "Assets/Splash.$ext" ] && cp "Assets/Splash.$ext" "$APP/Contents/Resources/Splash.$ext"
 done
 
+# Game-speed library, loaded into a game inside the guest (see Android/speed/myemu_speed.c).
+[ -f Assets/libmyemuspeed.so ] && cp Assets/libmyemuspeed.so "$APP/Contents/Resources/libmyemuspeed.so"
+
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

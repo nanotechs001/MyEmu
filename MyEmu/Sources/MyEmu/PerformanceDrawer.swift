@@ -12,6 +12,8 @@ struct PerformanceDrawer: View {
     private var options: AndroidOptions { AndroidOptions.shared }
 
     var body: some View {
+        speedSection
+        superLightSection
         engineSection
         frameRateSection
         renderSection
@@ -70,6 +72,35 @@ struct PerformanceDrawer: View {
         }
     }
 
+    private var speedSection: some View {
+        DrawerSection("Game speed") {
+            Picker("Speed", selection: Binding(get: { options.gameSpeed }, set: { options.gameSpeed = $0 })) {
+                ForEach(AndroidOptions.gameSpeeds, id: \.self) { speed in
+                    Text(speed == 1 ? "Normal" : "\(speed.truncatingRemainder(dividingBy: 1) == 0 ? String(Int(speed)) : String(speed))×").tag(speed)
+                }
+            }
+            .labelsHidden()
+            .disabled(model.profile != .customModel)
+            if model.profile != .customModel {
+                Text("Game speed needs the Custom model profile (its root and writable system). Switch it in the Device drawer.")
+                    .font(.caption).foregroundStyle(.orange)
+            }
+            Text("Runs the game's own clock faster or slower — only the game, not the rest of Android (same idea as Game Killer's speed, done inside the emulator). Takes effect when the game next starts; after that, changes apply live.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var superLightSection: some View {
+        DrawerSection("Super Light") {
+            Toggle("Super Light mode", isOn: Binding(get: { options.superLight }, set: { options.superLight = $0 }))
+                .toggleStyle(.switch)
+            Text("Makes games as light as possible when looks don't matter (farming, many instances): games draw at \(Int(AndroidOptions.superLightRenderScale * 100))%, \(AndroidOptions.superLightFPS) fps, Android animations and unused apps off. Applied right away; the render scale takes effect when a game next starts. Off brings your own settings back.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
     private var frameRateSection: some View {
         DrawerSection("Frame rate") {
             let maxFPS = model.displayMaxFPS ?? 60
@@ -79,6 +110,10 @@ struct PerformanceDrawer: View {
             })) {
                 Text("Max (\(maxFPS) fps)").tag(0)
                 ForEach(EmulatorModel.fpsChoices.filter { $0 < maxFPS }, id: \.self) { Text("\($0) fps").tag($0) }
+            }
+            .disabled(options.superLight)
+            if options.superLight {
+                Text("Super Light holds games at \(AndroidOptions.superLightFPS) fps.").font(.caption).foregroundStyle(.orange)
             }
             Text("Applied instantly. Max follows the screen MyEmu opened on (\(maxFPS) Hz).")
                 .font(.caption)
@@ -98,11 +133,16 @@ struct PerformanceDrawer: View {
                 model.focusScreen()
             })) {
                 ForEach(AndroidOptions.renderScales, id: \.self) { scale in
-                    Text(scale >= 1 ? "100% (sharpest)" : "\(Int((scale * 100).rounded()))%").tag(scale)
+                    Text(scale >= 1 ? "100% (sharpest)" : scale <= 0.1 ? "10% (fastest, very blurry)"
+                         : "\(Int((scale * 100).rounded()))%").tag(scale)
                 }
             }
             .labelsHidden()
-            Text("Lower draws games at less than full resolution to free GPU for smoothness (85% used about 10% less GPU at the same fps). Takes effect when a game next starts.")
+            .disabled(options.superLight)
+            if options.superLight {
+                Text("Super Light draws games at \(Int(AndroidOptions.superLightRenderScale * 100))%.").font(.caption).foregroundStyle(.orange)
+            }
+            Text("Lower draws games at less than full resolution to free GPU for smoothness (85% used about 10% less GPU at the same fps). Below 50% text and the HUD get blurry. Takes effect when a game next starts.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }

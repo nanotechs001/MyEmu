@@ -29,7 +29,14 @@ struct MyEmuApp: App {
     }
 
     var body: some Scene {
-        // One window per instance; launching opens instance 1.
+        // First scene, so MyEmu opens with it (MuMu-style launcher); also in the Window menu.
+        Window("MyEmu", id: "launcher") {
+            LauncherView(manager: manager)
+                .onAppear { delegate.manager = manager }
+        }
+        .defaultSize(width: 460, height: 460)
+
+        // One window per instance, opened from the launcher or the Instances drawer.
         WindowGroup("MyEmu", id: InstanceManager.windowID, for: String.self) { $id in
             InstanceWindow(manager: manager, id: id ?? Instance.main.id)
                 .onAppear { delegate.manager = manager }
