@@ -20,6 +20,8 @@ struct InstancesDrawer: View {
 /// The window MyEmu opens with (like MuMu's launcher): every Android, started from here.
 struct LauncherView: View {
     let manager: InstanceManager
+    let aiControl: AIControl
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -32,9 +34,39 @@ struct LauncherView: View {
             Text("Each one is a separate Android with its own apps, sign-ins and game data. Clone copies a stopped Android instantly, everything included.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            Divider()
+            AIControlSection(aiControl: aiControl)
         }
         .padding(20)
         .frame(minWidth: 440, minHeight: 360)
+        .onAppear { manager.openInstance = { openWindow(id: InstanceManager.windowID, value: $0) } }
+    }
+}
+
+/// The switch for the MCP server, and where AI apps connect.
+struct AIControlSection: View {
+    let aiControl: AIControl
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Toggle("Allow AI control (MCP)", isOn: Binding(get: { aiControl.isEnabled }, set: { aiControl.isEnabled = $0 }))
+                .toggleStyle(.switch)
+            if let problem = aiControl.problem {
+                Text(problem).font(.caption).foregroundStyle(.orange)
+            } else if aiControl.isEnabled {
+                HStack {
+                    Text(AIControl.url).font(.caption.monospaced()).textSelection(.enabled)
+                    Button("Copy") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(AIControl.url, forType: .string)
+                    }
+                    .controlSize(.small)
+                }
+            }
+            Text("AI apps on this Mac (Claude and other MCP clients) can then see every Android's screen and tap, type and open apps in it, like you do. Only this Mac can connect.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
     }
 }
 

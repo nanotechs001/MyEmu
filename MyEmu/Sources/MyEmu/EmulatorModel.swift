@@ -152,6 +152,8 @@ final class EmulatorModel {
     @ObservationIgnored private var frames: SharedFrameBuffer?
     @ObservationIgnored private var display: DirectDisplay?
     @ObservationIgnored private var engine: EngineInstance?
+    /// This instance's adb serial while its engine runs (the MCP server drives Android through it).
+    var adbSerial: String? { engine?.serial }
     @ObservationIgnored private var client: EmulatorClient?
     @ObservationIgnored private var tasks: [Task<Void, Never>] = []
     @ObservationIgnored private var rateTask: Task<Void, Never>?

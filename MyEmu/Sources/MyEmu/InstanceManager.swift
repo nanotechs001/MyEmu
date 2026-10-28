@@ -10,6 +10,9 @@ final class InstanceManager {
     /// Instances whose window is open (their Android is starting or running).
     private(set) var openIDs: Set<String> = []
     @ObservationIgnored private var models: [String: EmulatorModel] = [:]
+    /// Opens an instance's window, which starts it. Set by MyEmu's windows (only SwiftUI views can
+    /// open windows) so the MCP server can start instances too.
+    @ObservationIgnored var openInstance: (@MainActor (String) -> Void)?
 
     init() {
         // App-wide Android options apply to every running instance right away.
@@ -99,12 +102,16 @@ final class InstanceManager {
 struct InstanceWindow: View {
     let manager: InstanceManager
     let id: String
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         if let model = manager.model(for: id) {
             EmulatorWindowContent(model: model)
                 .navigationTitle(manager.name(of: id))
-                .onAppear { manager.windowOpened(id) }
+                .onAppear {
+                    manager.windowOpened(id)
+                    manager.openInstance = { openWindow(id: InstanceManager.windowID, value: $0) }
+                }
                 .onDisappear { manager.windowClosed(id) }
         } else {
             Text("This instance was deleted.").padding(40)
