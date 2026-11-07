@@ -18,7 +18,7 @@ final class AndroidOptions {
 
     /// Offered game-speed steps; the native library clamps to 0.1–10. 1.0 is normal. Per instance
     /// (stored on EmulatorModel), since each window can run a different game at a different speed.
-    static let gameSpeeds = [1.0, 1.5, 2.0, 3.0, 5.0, 10.0]
+    static let gameSpeeds = [1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 10.0]
 
     /// Super Light: games as light as possible, looks don't matter (farming, many instances).
     static let superLightRenderScale = 0.1

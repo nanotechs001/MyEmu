@@ -11,3 +11,10 @@ MyEmu/build.noindex/
 # Windows phase-0 test output (sent by hand, may name the machine)
 MyEmuWindows/phase0/phase0-report-*.txt
 MyEmuWindows/phase0/phase0-engine.log
+
+# speedmod Gradle/CMake build output, machine-local SDK path, and the throwaway re-signing key
+MyEmu/Android/speedmod/.gradle/
+MyEmu/Android/speedmod/app/.cxx/
+MyEmu/Android/speedmod/app/build/
+MyEmu/Android/speedmod/local.properties
+MyEmu/Android/speedmod/patch.keystore

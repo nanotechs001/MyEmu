@@ -1,0 +1,39 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.myemu.speedmod'
+    compileSdk 34
+    ndkVersion '30.0.16248370'
+
+    defaultConfig {
+        applicationId 'com.myemu.speedmod'
+        minSdk 29 // __system_property_area_serial is exported from API 29; matches Android/speed build
+        targetSdk 29
+        versionCode 1
+        versionName '1.0'
+        ndk { abiFilters 'arm64-v8a' }
+        externalNativeBuild {
+            cmake { arguments '-DANDROID_STL=none' }
+        }
+    }
+
+    buildFeatures { prefab true } // shadowhook ships headers + .so via prefab
+
+    externalNativeBuild {
+        cmake { path 'src/main/cpp/CMakeLists.txt' }
+    }
+
+    // Keep the .so uncompressed and extracted so System.loadLibrary works inside the sandbox.
+    packagingOptions { jniLibs { useLegacyPackaging true } }
+
+    buildTypes {
+        debug {}
+    }
+}
+
+dependencies {
+    compileOnly 'de.robv.android.xposed:api:82'
+    implementation 'com.bytedance.android:shadowhook:1.1.1' // inline hooking; game lib GOT stays untouched
+}
