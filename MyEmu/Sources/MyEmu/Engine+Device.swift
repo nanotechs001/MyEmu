@@ -113,7 +113,8 @@ extension Engine {
     static func installSpeedLibrary(serial: String) async throws -> Bool {
         guard let lib = speedLibraryFile else { return false }
         let want = SHA256.hash(data: try Data(contentsOf: lib)).map { String(format: "%02x", $0) }.joined()
-        if try await adb(serial: serial, ["shell", "sha256sum \(AndroidCommands.speedLibrary) 2>/dev/null"]).contains(want) {
+        // `; true`: on a fresh Android the file is missing, and sha256sum's failure must not abort the install.
+        if try await adb(serial: serial, ["shell", "sha256sum \(AndroidCommands.speedLibrary) 2>/dev/null; true"]).contains(want) {
             return true
         }
         try await remountSystem(serial: serial)
@@ -132,9 +133,10 @@ extension Engine {
         // Install on demand: the boot-time install can be missed (e.g. a slow custom-model boot), and
         // without the library the wrap below is skipped and speed silently stays normal. Cheap when the
         // library is already there (just a hash check); a remount only happens when it must be pushed.
-        if speed != 1.0 { _ = try? await installSpeedLibrary(serial: serial) }
+        // Install errors propagate so the user sees why speed isn't working (was silently swallowed).
+        if speed != 1.0 { _ = try await installSpeedLibrary(serial: serial) }
         let present = try await adb(serial: serial,
-            ["shell", "ls \(AndroidCommands.speedLibrary) >/dev/null 2>&1 && echo yes"]).contains("yes")
+            ["shell", "ls \(AndroidCommands.speedLibrary) >/dev/null 2>&1 && echo yes; true"]).contains("yes")
         let scaling = speed != 1.0 && present
         _ = try await adb(serial: serial, ["shell", AndroidCommands.gameSpeed(scaling ? speed : 1.0, package: package)])
     }

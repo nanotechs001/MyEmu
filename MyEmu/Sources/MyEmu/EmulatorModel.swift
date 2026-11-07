@@ -378,7 +378,8 @@ final class EmulatorModel {
             do {
                 try await Engine.setGameSpeed(speed, package: game, serial: engine.serial)
             } catch {
-                log.error("Could not set game speed: \(error.localizedDescription)")
+                log.error("Could not set game speed: \(error.localizedDescription, privacy: .public)")
+                show(notice: "Game speed failed: \(error.localizedDescription)", for: .seconds(10))
             }
         }
     }
@@ -499,7 +500,7 @@ final class EmulatorModel {
             do {
                 _ = try await Engine.installSpeedLibrary(serial: serial)
             } catch {
-                log.error("Speed library install failed: \(error.localizedDescription)")
+                log.error("Speed library install failed: \(error.localizedDescription, privacy: .public)")
             }
         }
     }
