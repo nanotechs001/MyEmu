@@ -133,9 +133,13 @@ enum AndroidCommands {
     /// shortcut: Android caps property names at 92 chars, so a package over ~86 chars can't be wrapped;
     /// real game packages are far shorter, so the `setprop` just fails harmlessly if one ever is.
     static func gameSpeed(_ speed: Double, package: String) -> String {
-        let wrap = speed == 1.0 ? "setprop wrap.\(package) ''"
-                                : "setprop wrap.\(package) LD_PRELOAD=\(speedLibrary)"
-        return "\(wrap); setprop \(speedProperty) \(String(format: "%.2f", speed))"
+        let live = "setprop \(speedProperty) \(String(format: "%.2f", speed))"
+        guard speed != 1.0 else { return "setprop wrap.\(package) ''; \(live)" }
+        // wrap.* is lost on every Android reboot, so a game opened before MyEmu re-sets it runs without
+        // the library; restart it once so speed applies (already-wrapped games just change speed live).
+        return "was=$(getprop wrap.\(package)); setprop wrap.\(package) LD_PRELOAD=\(speedLibrary); \(live); "
+            + "[ -z \"$was\" ] && pidof \(package) >/dev/null && am force-stop \(package) && "
+            + "monkey -p \(package) -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1; true"
     }
 }
 

@@ -37,10 +37,13 @@ import Testing
 @MainActor
 @Test func gameSpeedWrapsOnlyWhenNotNormalAndSetsTheLiveProperty() {
     let fast = AndroidCommands.gameSpeed(2.0, package: "com.com.Xerion")
-    #expect(fast == "setprop wrap.com.com.Xerion LD_PRELOAD=/system/lib64/libgpu_tls.so; setprop debug.gpu.tls 2.00")
+    // A game already running without the library (wrapper was unset, e.g. after a reboot) restarts once.
+    #expect(fast == "was=$(getprop wrap.com.com.Xerion); setprop wrap.com.com.Xerion LD_PRELOAD=/system/lib64/libgpu_tls.so; setprop debug.gpu.tls 2.00; "
+        + "[ -z \"$was\" ] && pidof com.com.Xerion >/dev/null && am force-stop com.com.Xerion && "
+        + "monkey -p com.com.Xerion -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1; true")
     let normal = AndroidCommands.gameSpeed(1.0, package: "com.com.Xerion")
     #expect(normal == "setprop wrap.com.com.Xerion ''; setprop debug.gpu.tls 1.00") // clears the wrapper
-    #expect(AndroidCommands.gameSpeed(1.5, package: "a.b").hasSuffix("debug.gpu.tls 1.50"))
+    #expect(AndroidCommands.gameSpeed(1.5, package: "a.b").contains("debug.gpu.tls 1.50"))
     #expect(AndroidOptions.gameSpeeds.first == 1.0) // normal is always offered
     #expect(AndroidOptions.gameSpeeds.last == 10.0) // capped at 10x (the library's max)
     #expect(AndroidOptions.gameSpeeds.allSatisfy { $0 >= 0.1 && $0 <= 10 }) // within the library's clamp
