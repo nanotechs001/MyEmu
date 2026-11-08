@@ -1,5 +1,6 @@
-// AutoPots' fast path, ported from the Mac app's AutoPotsRunner.swift: read HP from each MuMu capture on
-// its own thread and tap the potion right away. Settings and on/off arrive through Config.
+// AutoPots' fast path, ported from the Mac app's AutoPotsRunner.swift: read HP from each capture on its own
+// thread and tap the potion right away. Settings and on/off arrive through Config. Shared by the MuMu app
+// (MuMu's SDK) and MyEmu (its own frames and touches).
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 
@@ -10,13 +11,14 @@ public sealed class Runner : IDisposable
     /// Tapping = running, the game is in front and nothing is being adjusted (otherwise readings only).
     public sealed record Config(AutoPotsSettings Settings, bool Tapping);
 
-    // ponytail: MuMu's SDK has no new-frame signal, so it's polled; each capture copies the 4.4 MB frame.
-    // 10 ms (100 reads/s) is ~3× the game's fps in a crowd. Event-driven capture if MuMu ever offers it.
+    // ponytail: captures are polled (MuMu's SDK has no new-frame signal); 10 ms (100 reads/s) is ~3× the
+    // game's fps in a crowd. Event-driven reads if a frame source ever needs it.
     const int MinPeriodMs = 10;
     const int PublishIntervalMs = 100;
     const int RetryMs = 500;
 
-    readonly MuMu mumu;
+    readonly Func<IPixelFrame?> capture;
+    readonly Action<int, int, bool> touch;
     readonly Action<float?> onReading;
     readonly Thread thread;
     volatile Config config;
@@ -34,9 +36,11 @@ public sealed class Runner : IDisposable
     [DllImport("winmm.dll")] static extern uint timeBeginPeriod(uint ms);
     [DllImport("winmm.dll")] static extern uint timeEndPeriod(uint ms);
 
-    public Runner(MuMu mumu, Config config, Action<float?> onReading)
+    /// `capture`: the current screen, full size, or null when there is none. `touch`: (x, y, down) in its pixels.
+    public Runner(Func<IPixelFrame?> capture, Action<int, int, bool> touch, Config config, Action<float?> onReading)
     {
-        this.mumu = mumu;
+        this.capture = capture;
+        this.touch = touch;
         this.config = config;
         this.onReading = onReading;
         thread = new Thread(Loop) { IsBackground = true, Name = "AutoPots", Priority = ThreadPriority.AboveNormal };
@@ -53,7 +57,7 @@ public sealed class Runner : IDisposable
             while (!stopping)
             {
                 long start = NowMs;
-                var frame = mumu.Capture();
+                var frame = capture();
                 if (frame == null)
                 {
                     Publish(null, force: true);
@@ -127,14 +131,14 @@ public sealed class Runner : IDisposable
         var points = Enumerable.Range(0, count)
             .Select(_ => r > 0 ? new PixelPoint(potion.X + Random.Shared.Next(-r, r + 1), potion.Y + Random.Shared.Next(-r, r + 1)) : potion)
             .ToArray();
-        mumu.Touch(points[0].X, points[0].Y, down: true);
+        touch(points[0].X, points[0].Y, true);
         Task.Run(() =>
         {
             for (int i = 0; i < count; i++)
             {
-                if (i > 0) { Thread.Sleep(AutoPotsRules.BurstGapMs); mumu.Touch(points[i].X, points[i].Y, down: true); }
+                if (i > 0) { Thread.Sleep(AutoPotsRules.BurstGapMs); touch(points[i].X, points[i].Y, true); }
                 Thread.Sleep(press);
-                mumu.Touch(points[i].X, points[i].Y, down: false);
+                touch(points[i].X, points[i].Y, false);
             }
         });
     }

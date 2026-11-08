@@ -36,7 +36,14 @@ Status (2026-11-08, branch `windows-autopots`):
     The keys are drawn by `KeymapOverlay`, a transparent owned window over the screen (WPF can't draw
     over the D3D child): click-through while playing, takes clicks while editing, never takes focus.
     Checked in Xerion: N mapped onto Notice opens it; clicks still reach the game through the overlay.
-  - Not yet: instances, display/device/CPU-memory settings, AutoPots, spoofing, game speed
+  - AutoPots: the MuMu app's `Detection.cs`, `Rules.cs`, `Runner.cs` and `Calibration.cs` are linked
+    into MyEmu (one copy; `Runner` now takes any frame source + touch sink). `AutoPotsController` reads
+    MyEmu's own frames (RGBA, read in place) and taps with finger 9 (the Mac's potion finger). Options
+    panel: Start/Stop (F8, global), Auto-detect, Adjust on screen (drag the box, click the potion; drawn
+    by `KeymapOverlay`), Orb/Simple view, tuning. Setups: `%APPDATA%\MyEmu\autopots\<package>.json`,
+    the MuMu app's file. ponytail: coordinates are screen pixels, so a setup made in MuMu (1280×860)
+    is wrong in MyEmu (1600×900) — re-run Auto-detect; store the screen size if both stay in use.
+  - Not yet: instances, display/device/CPU-memory settings, spoofing, game speed
     (needs the Custom-model profile), MCP, installer; renderer change needs an in-app Android restart.
 The Mac app in `MyEmu/` is Swift/AppKit/Metal and cannot be compiled for Windows — the Windows
 version is a new native app that reuses MyEmu's file formats, engine commands and test fixtures.

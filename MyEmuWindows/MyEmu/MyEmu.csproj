@@ -20,6 +20,12 @@
     <PackageReference Include="Vortice.DXGI" Version="3.8.3" />
   </ItemGroup>
 
+  <!-- AutoPots' detection, rules, fast path and auto-detect, shared with the MuMu AutoPots app. -->
+  <ItemGroup>
+    <Compile Include="..\AutoPots\Detection.cs;..\AutoPots\Rules.cs;..\AutoPots\Runner.cs;..\AutoPots\Calibration.cs"
+             Link="AutoPots\%(Filename)%(Extension)" />
+  </ItemGroup>
+
   <!-- The same engine API the Mac app uses. -->
   <ItemGroup>
     <Protobuf Include="..\..\MyEmu\Sources\MyEmu\emulator_controller.proto" Link="emulator_controller.proto" GrpcServices="Client" />

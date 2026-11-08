@@ -69,6 +69,31 @@
                         <Button Content="Clear all keys…" Margin="0,6,0,0" Click="ClearKeys_Click" Focusable="False" HorizontalAlignment="Left"/>
                     </StackPanel>
 
+                    <TextBlock Style="{StaticResource Heading}" Text="AutoPots"/>
+                    <TextBlock x:Name="PotsStatus" Foreground="#e6e6e6" FontSize="14" FontWeight="SemiBold" Text="Off."/>
+                    <TextBlock x:Name="PotsMessage" Foreground="#f59e0b" Visibility="Collapsed"/>
+                    <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                        <TextBlock Text="Game view" Foreground="#e6e6e6" FontSize="12" Margin="0,0,10,0" VerticalAlignment="Center"/>
+                        <RadioButton x:Name="OrbViewBox" Content="Orb" Foreground="#e6e6e6" Margin="0,0,12,0" Focusable="False" Checked="PotsView_Checked"/>
+                        <RadioButton x:Name="SimpleViewBox" Content="Simple" Foreground="#e6e6e6" Focusable="False" Checked="PotsView_Checked"/>
+                    </StackPanel>
+                    <WrapPanel Margin="0,6,0,0">
+                        <Button x:Name="PotsStartButton" Content="Start (F8)" FontWeight="SemiBold" Padding="8,2" Margin="0,0,6,6" Focusable="False" Click="PotsStart_Click"/>
+                        <Button x:Name="PotsDetectButton" Content="Auto-detect (HP full)" Padding="8,2" Margin="0,0,6,6" Focusable="False" Click="PotsDetect_Click"/>
+                        <ToggleButton x:Name="PotsAdjustButton" Content="Adjust on screen" Padding="8,2" Margin="0,0,6,6" Focusable="False"
+                                      Checked="PotsAdjust_Toggled" Unchecked="PotsAdjust_Toggled"/>
+                        <Button x:Name="PotsTemplateButton" Content="Retake template" Padding="8,2" Margin="0,0,6,6" Focusable="False" Click="PotsTemplate_Click"/>
+                    </WrapPanel>
+                    <TextBlock x:Name="PotsConfirmLabel" Foreground="#e6e6e6" FontSize="12"/>
+                    <Slider x:Name="PotsConfirmSlider" Minimum="1" Maximum="10" IsSnapToTickEnabled="True" TickFrequency="1" Focusable="False" ValueChanged="PotsTuning_Changed"/>
+                    <TextBlock x:Name="PotsBurstLabel" Foreground="#e6e6e6" FontSize="12"/>
+                    <Slider x:Name="PotsBurstSlider" Minimum="1" Maximum="10" IsSnapToTickEnabled="True" TickFrequency="1" Focusable="False" ValueChanged="PotsTuning_Changed"/>
+                    <TextBlock x:Name="PotsPressLabel" Foreground="#e6e6e6" FontSize="12"/>
+                    <Slider x:Name="PotsPressSlider" Minimum="0" Maximum="500" IsSnapToTickEnabled="True" TickFrequency="10" Focusable="False" ValueChanged="PotsTuning_Changed"/>
+                    <TextBlock x:Name="PotsSpreadLabel" Foreground="#e6e6e6" FontSize="12"/>
+                    <Slider x:Name="PotsSpreadSlider" Minimum="0" Maximum="80" IsSnapToTickEnabled="True" TickFrequency="1" Focusable="False" ValueChanged="PotsTuning_Changed"/>
+                    <TextBlock Text="Taps your HP potion when HP drops below 90%. Set it up once per game with HP full; F8 starts and stops it from anywhere."/>
+
                     <TextBlock Style="{StaticResource Heading}" Text="Frame rate"/>
                     <ComboBox x:Name="FpsBox" SelectionChanged="Option_Changed"/>
                     <CheckBox x:Name="MinimizedBox" Content="Drop to 30 fps when minimized" Click="Option_Changed"/>

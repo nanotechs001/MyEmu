@@ -17,14 +17,6 @@ public partial class MainWindow : Window
     [DllImport("user32.dll")] static extern bool RegisterHotKey(IntPtr hwnd, int id, uint modifiers, uint key);
     [DllImport("user32.dll")] static extern bool UnregisterHotKey(IntPtr hwnd, int id);
 
-    // Auto-detect, as the Mac app (autopotsCO's calibration step 0).
-    const int DetectSamples = 3, DetectTries = 5, DetectGapMs = 200;
-    /// A box that reads below this at full HP is nudged down until it doesn't (up to 40 px).
-    const float FullHpGate = 0.97f;
-    const int MaxNudgePx = 40;
-    /// autopotsCO aims the orb potion 8 px below the computed point.
-    const int OrbPotionBiasPx = 8;
-
     readonly string? root = MuMu.FindRoot();
     MuMu? mumu;
     Runner? runner;
@@ -62,7 +54,7 @@ public partial class MainWindow : Window
         Disconnect();
         if (root == null) { ConnectionText.Text = "MuMu Player 12 isn't installed."; return; }
         var m = mumu = new MuMu(root, InstanceIndex);
-        runner = new Runner(m, RunnerConfig, value => Dispatcher.BeginInvoke(() => { reading = value; UpdateStatus(); }));
+        runner = new Runner(m.Capture, (x, y, down) => m.Touch(x, y, down), RunnerConfig, value => Dispatcher.BeginInvoke(() => { reading = value; UpdateStatus(); }));
         previewTimer.Start();
         var watch = appWatch = new CancellationTokenSource();
         Task.Run(async () =>
@@ -327,71 +319,20 @@ public partial class MainWindow : Window
         DetectButton.IsEnabled = false;
         Message("Looking for the HP display…");
         var view = settings.View;
-        var (change, message) = await Task.Run(() => Detect(m, view));
+        var (change, message) = await Task.Run(() => Calibration.Detect(m.CaptureCopy, view));
         if (change != null) Update(change);
         Message(message);
         DetectButton.IsEnabled = true;
         if (wasRunning) Start();
     }
 
-    /// Finds the HP orb or text and the potion on screen (HP must be full). Returns the settings change.
-    static (Func<AutoPotsSettings, AutoPotsSettings>? Change, string Message) Detect(MuMu m, GameView view)
-    {
-        var orbBoxes = new List<int[]>();
-        var simpleMaps = new List<SimpleHp.MapResult>();
-        NemuFrame? last = null;
-        for (int attempt = 0; attempt < DetectTries; attempt++)
-        {
-            if (attempt > 0) Thread.Sleep(DetectGapMs);
-            if (m.CaptureCopy() is not { } frame) continue;
-            last = frame;
-            if (view == GameView.Orb) { if (HpDetector.AutoMapOrb(frame) is { } box) orbBoxes.Add(box); }
-            else if (SimpleHp.AutoMap(frame) is { FromFallback: false } map) simpleMaps.Add(map);
-            if (Math.Max(orbBoxes.Count, simpleMaps.Count) >= DetectSamples) break;
-        }
-        if (last == null) return (null, "Couldn't read the screen. Is the MuMu instance running?");
-        return view == GameView.Orb ? DetectOrb(orbBoxes, last) : DetectSimple(simpleMaps, last);
-    }
-
-    static (Func<AutoPotsSettings, AutoPotsSettings>?, string) DetectOrb(List<int[]> boxes, NemuFrame frame)
-    {
-        if (boxes.Count == 0)
-            return (null, SimpleHp.AutoMap(frame).FromFallback
-                ? "No HP orb found. Show the game's normal HUD with the orb visible, then try again."
-                : "No HP orb found, but the simple-view HP text is there: switch Game view to Simple.");
-        var box = Enumerable.Range(0, 4).Select(i => boxes.Select(b => b[i]).OrderBy(v => v).ElementAt(boxes.Count / 2)).ToArray();
-        int nudge = 0;
-        while (HpDetector.HpFractionArc(frame, box[0], box[1], box[2], box[3]) < FullHpGate && nudge < MaxNudgePx) { box[1]++; nudge++; }
-        if (HpDetector.HpFractionArc(frame, box[0], box[1], box[2], box[3]) < FullHpGate)
-            return (null, "Found the orb, but HP doesn't read full. Fill your HP, then Auto-detect again.");
-        var orbBox = new PixelRect(box[0], box[1], box[2], box[3]);
-        var potion = new PixelPoint((int)(box[0] + HpDetector.PotionXPerWidth * box[2]),
-                                    (int)(box[1] + HpDetector.PotionYPerHeight * box[3]) + OrbPotionBiasPx);
-        return (s => s with { OrbBox = orbBox, OrbPotion = potion }, "Found the HP orb and the potion. Check the green dot sits on your HP potion.");
-    }
-
-    static (Func<AutoPotsSettings, AutoPotsSettings>?, string) DetectSimple(List<SimpleHp.MapResult> maps, NemuFrame frame)
-    {
-        if (maps.Count == 0)
-            return (null, HpDetector.AutoMapOrb(frame) != null
-                ? "No \"HP: 100%\" text found, but the HP orb is there: switch Game view to Orb."
-                : "No \"HP: 100%\" text found. Switch the game to simple view with HP full, then try again.");
-        var map = maps.OrderBy(r => r.Left).ElementAt(maps.Count / 2);
-        var box = new PixelRect(map.Left, map.Top, map.Width, map.Height);
-        if (SimpleHp.BuildSignature(frame, box.X, box.Y, box.Width, box.Height, 1) is not { } signature)
-            return (null, "Found the HP text but couldn't read it clearly. Try again with HP full.");
-        var potion = new PixelPoint((int)map.PotionX, (int)map.PotionY);
-        return (s => s with { SimpleBox = box, SimplePotion = potion, SimpleSignature = SimpleHp.Encode(signature) },
-                map.PotionFound ? "Found the HP text and the potion." : "Found the HP text. Click your HP potion on the screen to place the dot.");
-    }
-
     /// Simple view: re-takes the "100%" template after the box was moved by hand. HP must be full.
     void RetakeTemplate(object sender, RoutedEventArgs e)
     {
         if (settings.SimpleBox is not { } box || mumu?.CaptureCopy() is not { } frame) return;
-        if (SimpleHp.BuildSignature(frame, box.X, box.Y, box.Width, box.Height, 1) is { } signature)
+        if (Calibration.RetakeTemplate(frame, box) is { } signature)
         {
-            Update(s => s with { SimpleSignature = SimpleHp.Encode(signature) });
+            Update(s => s with { SimpleSignature = signature });
             Message("Took a new HP template.");
         }
         else Message("No readable HP text in the box. Move it over \"100%\" with HP full.");

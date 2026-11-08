@@ -3,6 +3,7 @@ using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Interop;
 
 namespace MyEmu;
 
@@ -30,6 +31,8 @@ public partial class MainWindow : Window
     bool loadingOptions = true; // controls fire change events while the XAML loads, before anything exists
 
     readonly GameKeys gameKeys;
+    readonly AutoPotsController pots;
+    const int PotionFingerId = 9; // the Mac's AutoPots.potionFingerID
     KeymapOverlay? overlay;
     CancellationTokenSource? typingWatch, typingCheck;
 
@@ -41,9 +44,12 @@ public partial class MainWindow : Window
             () => options.GameKeysEnabled, on => { options.GameKeysEnabled = on; options.Save(); });
         gameKeys.OnChange += () => { overlay?.Refresh(); ShowGameKeys(); };
         gameKeys.OnLiveChange += WatchTyping;
+        pots = new AutoPotsController(LiveFrame, FrameCopy, (x, y, down) => client?.Touch(PotionFingerId, x, y, down));
+        pots.OnChange += () => { overlay?.Refresh(); ShowAutoPots(); };
+        SourceInitialized += (_, _) => RegisterF8();
         Loaded += (_, _) =>
         {
-            overlay = new KeymapOverlay(this, gameKeys);
+            overlay = new KeymapOverlay(this, gameKeys, pots);
             overlay.Show();
             PlaceOverlay();
         };
@@ -51,6 +57,7 @@ public partial class MainWindow : Window
         LocationChanged += (_, _) => PlaceOverlay();
         Deactivated += (_, _) => gameKeys.ReleaseAll(); // keys released elsewhere never reach us
         ShowGameKeys();
+        ShowAutoPots();
         ShowOptions();
         StateChanged += (_, _) => ApplyRate(); // minimized → background frame rate
         Loaded += async (_, _) => await StartAsync();
@@ -76,6 +83,7 @@ public partial class MainWindow : Window
             ShowOptions(); // the frame-rate list depends on the screen's rate
             ApplyOptions();
             _ = WatchForegroundAppAsync(engine.Serial);
+            pots.Attach(value => Dispatcher.BeginInvoke(() => pots.SetReading(value)));
             var size = engine.Size;
             await client.StreamFramesAsync(frames, size, (w, h) => // frame thread
             {
@@ -155,6 +163,7 @@ public partial class MainWindow : Window
         if (package == null) return;
         currentApp = package;
         gameKeys.AppDidChange(package);
+        pots.AppDidChange(package);
         ScheduleTypingCheck(); // the new app may open with a text box focused
         ApplyRate();
     }
@@ -205,6 +214,85 @@ public partial class MainWindow : Window
             }
         });
     }
+
+    // --- AutoPots
+
+    /// The newest frame, read in place (a frame arriving mid-read can tear a little; HP reads don't mind).
+    MyEmu.AutoPots.IPixelFrame? LiveFrame() => frames != null && frameWidth > 0 ? new RgbaFrame(frames.Pixels, frameWidth, frameHeight) : null;
+
+    /// A stable copy for Auto-detect and templates.
+    MyEmu.AutoPots.IPixelFrame? FrameCopy() => frames != null && frameWidth > 0 ? new RgbaFrame((byte[])frames.Pixels.Clone(), frameWidth, frameHeight) : null;
+
+    void ShowAutoPots()
+    {
+        var s = pots.Settings;
+        loadingOptions = true;
+        PotsStatus.Text = pots.Status;
+        PotsMessage.Text = pots.Message ?? "";
+        PotsMessage.Visibility = pots.Message == null ? Visibility.Collapsed : Visibility.Visible;
+        OrbViewBox.IsChecked = s.View == MyEmu.AutoPots.GameView.Orb;
+        SimpleViewBox.IsChecked = s.View == MyEmu.AutoPots.GameView.Simple;
+        PotsStartButton.Content = pots.Running ? "Stop (F8)" : "Start (F8)";
+        PotsDetectButton.IsEnabled = !pots.Detecting;
+        PotsAdjustButton.IsChecked = pots.Adjusting;
+        PotsTemplateButton.Visibility = s.View == MyEmu.AutoPots.GameView.Simple ? Visibility.Visible : Visibility.Collapsed;
+        (PotsConfirmSlider.Value, PotsBurstSlider.Value, PotsPressSlider.Value, PotsSpreadSlider.Value) =
+            (s.ConfirmReadings, s.ClicksPerBurst, s.PressMs, s.TapRandomPx);
+        ShowPotsTuningLabels();
+        loadingOptions = false;
+    }
+
+    void ShowPotsTuningLabels()
+    {
+        PotsConfirmLabel.Text = $"Readings before potting: {PotsConfirmSlider.Value:0}";
+        PotsBurstLabel.Text = $"Taps per burst: {PotsBurstSlider.Value:0}";
+        PotsPressLabel.Text = $"Press length: {PotsPressSlider.Value:0} ms";
+        PotsSpreadLabel.Text = $"Tap spread: {PotsSpreadSlider.Value:0} px";
+    }
+
+    void PotsStart_Click(object sender, RoutedEventArgs e) => pots.Toggle();
+    async void PotsDetect_Click(object sender, RoutedEventArgs e) => await pots.AutoDetectAsync();
+    void PotsTemplate_Click(object sender, RoutedEventArgs e) => pots.RetakeTemplate();
+
+    void PotsAdjust_Toggled(object sender, RoutedEventArgs e)
+    {
+        if (!loadingOptions) pots.SetAdjusting(PotsAdjustButton.IsChecked == true);
+    }
+
+    void PotsView_Checked(object sender, RoutedEventArgs e)
+    {
+        if (!loadingOptions)
+            pots.Update(s => s with { View = SimpleViewBox.IsChecked == true ? MyEmu.AutoPots.GameView.Simple : MyEmu.AutoPots.GameView.Orb });
+    }
+
+    void PotsTuning_Changed(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (loadingOptions) return;
+        ShowPotsTuningLabels();
+        pots.Update(s => s with
+        {
+            ConfirmReadings = (int)PotsConfirmSlider.Value, ClicksPerBurst = (int)PotsBurstSlider.Value,
+            PressMs = (int)PotsPressSlider.Value, TapRandomPx = (int)PotsSpreadSlider.Value,
+        });
+    }
+
+    /// F8 starts/stops AutoPots from anywhere, as in the MuMu AutoPots app.
+    void RegisterF8()
+    {
+        var source = HwndSource.FromHwnd(new WindowInteropHelper(this).Handle);
+        source.AddHook((nint hwnd, int msg, nint w, nint l, ref bool handled) =>
+        {
+            if (msg == 0x0312 && w == HotkeyId) { pots.Toggle(); handled = true; } // WM_HOTKEY
+            return 0;
+        });
+        if (!RegisterHotKey(source.Handle, HotkeyId, 0x4000 /* MOD_NOREPEAT */, 0x77 /* F8 */))
+            PotsMessage.Text = "F8 is taken by another app (the MuMu AutoPots app?); use the Start button.";
+        Closed += (_, _) => UnregisterHotKey(source.Handle, HotkeyId);
+    }
+
+    const int HotkeyId = 1;
+    [DllImport("user32.dll")] static extern bool RegisterHotKey(nint hwnd, int id, uint modifiers, uint key);
+    [DllImport("user32.dll")] static extern bool UnregisterHotKey(nint hwnd, int id);
 
     // --- Game keys UI
 
@@ -438,6 +526,7 @@ public partial class MainWindow : Window
         stopping = true;
         Status.Text = "Shutting down Android...";
         running.Cancel();
+        pots.Dispose(); // no taps into an Android that's shutting down
         await Engine.StopAsync(engine);
         client?.Dispose();
         frames?.Dispose();

@@ -4,13 +4,15 @@ using System.Windows;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
+using MyEmu.AutoPots;
 
 namespace MyEmu;
 
-/// The mapped keys drawn over Android's screen (port of KeymapOverlayView + ScreenView's editor mouse).
+/// The mapped keys and AutoPots' HP box and potion dot, drawn over Android's screen (port of KeymapOverlayView,
+/// AutoPotsOverlayView and ScreenView's editor mouse).
 /// A transparent window of its own, owned by MainWindow and kept over the screen: WPF can't draw over
 /// the Direct3D child window. While playing, clicks pass through it (WS_EX_TRANSPARENT) to the game;
-/// while editing it takes them. It never takes keyboard focus, so keys keep going to MainWindow.
+/// while editing keys or adjusting AutoPots it takes them. It never takes keyboard focus, so keys keep going to MainWindow.
 public sealed class KeymapOverlay : Window
 {
     public const double KeyRadius = 20;
@@ -18,13 +20,15 @@ public sealed class KeymapOverlay : Window
     const double MinEditingAlpha = 0.45;
 
     readonly GameKeys keys;
+    readonly AutoPotsController pots;
     readonly Canvas canvas;
     BindingRef? dragged;
     bool clickThrough;
 
-    public KeymapOverlay(Window owner, GameKeys keys)
+    public KeymapOverlay(Window owner, GameKeys keys, AutoPotsController pots)
     {
         this.keys = keys;
+        this.pots = pots;
         Owner = owner;
         WindowStyle = WindowStyle.None;
         AllowsTransparency = true;
@@ -41,24 +45,44 @@ public sealed class KeymapOverlay : Window
             Refresh();
         };
         MouseLeftButtonDown += (_, e) => EditorDown(e);
-        MouseMove += (_, e) => { if (dragged != null && e.LeftButton == MouseButtonState.Pressed) keys.EditorDrag(dragged, Normalized(e, clamp: true)); };
-        MouseLeftButtonUp += (_, _) => { dragged = null; ReleaseMouseCapture(); };
+        MouseMove += (_, e) =>
+        {
+            if (e.LeftButton != MouseButtonState.Pressed) return;
+            if (dragged != null) keys.EditorDrag(dragged, Normalized(e, clamp: true));
+            else if (PotsAdjusting && DevicePixel(Normalized(e, clamp: true)) is { } p) pots.DragTo(p);
+        };
+        MouseLeftButtonUp += (_, _) =>
+        {
+            dragged = null;
+            if (PotsAdjusting) pots.Release();
+            ReleaseMouseCapture();
+        };
         MouseRightButtonDown += (_, e) => { if (keys.IsEditing && Hit(Normalized(e)) is { } hit) keys.EditorRemove(hit); };
     }
 
-    /// Redraws, and lets clicks through unless editing.
+    bool Interactive => keys.IsEditing || pots.Adjusting;
+    /// The key editor wins when both are on.
+    bool PotsAdjusting => pots.Adjusting && !keys.IsEditing;
+
+    /// Redraws, and lets clicks through unless editing keys or adjusting AutoPots.
     public void Refresh()
     {
         canvas.InvalidateVisual();
         var hwnd = new WindowInteropHelper(this).Handle;
-        if (hwnd == 0 || clickThrough == !keys.IsEditing) return;
-        clickThrough = !keys.IsEditing;
+        if (hwnd == 0 || clickThrough == !Interactive) return;
+        clickThrough = !Interactive;
         var style = GetWindowLong(hwnd, GwlExStyle);
         SetWindowLong(hwnd, GwlExStyle, clickThrough ? style | WsExTransparent : style & ~WsExTransparent);
     }
 
     void EditorDown(MouseButtonEventArgs e)
     {
+        if (PotsAdjusting)
+        {
+            if (DevicePixel(Normalized(e)) is { } p) pots.PressAt(p);
+            CaptureMouse();
+            return;
+        }
         if (!keys.IsEditing) return;
         var point = Normalized(e);
         var placeJoystick = Keyboard.Modifiers.HasFlag(ModifierKeys.Alt);
@@ -74,6 +98,10 @@ public sealed class KeymapOverlay : Window
         double x = p.X / Math.Max(1, canvas.ActualWidth), y = p.Y / Math.Max(1, canvas.ActualHeight);
         return clamp ? new(Math.Clamp(x, 0, 1), Math.Clamp(y, 0, 1)) : new(x, y);
     }
+
+    /// AutoPots works in Android screen pixels.
+    PixelPoint? DevicePixel(NormalizedPoint p) =>
+        keys.Device is { } d ? new PixelPoint((int)Math.Round(Math.Clamp(p.X, 0, 1) * d.Width), (int)Math.Round(Math.Clamp(p.Y, 0, 1) * d.Height)) : null;
 
     BindingRef? Hit(NormalizedPoint p)
     {
@@ -100,9 +128,10 @@ public sealed class KeymapOverlay : Window
             var editing = keys.IsEditing;
             double w = ActualWidth, h = ActualHeight;
             // Something must cover the area while editing, or clicks on empty spots fall through.
-            dc.DrawRectangle(new SolidColorBrush(Color.FromArgb(editing ? (byte)1 : (byte)0, 0, 0, 0)),
-                editing ? new Pen(new SolidColorBrush(Color.FromArgb(204, Accent.R, Accent.G, Accent.B)), 2) : null,
+            dc.DrawRectangle(new SolidColorBrush(Color.FromArgb(owner.Interactive ? (byte)1 : (byte)0, 0, 0, 0)),
+                owner.Interactive ? new Pen(new SolidColorBrush(Color.FromArgb(204, Accent.R, Accent.G, Accent.B)), 2) : null,
                 new Rect(1, 1, Math.Max(0, w - 2), Math.Max(0, h - 2)));
+            DrawAutoPots(dc, w, h);
             if (!editing && !(keys.IsEnabled && !keys.IsTyping && !keys.Keymap.IsEmpty)) return;
             var keymap = keys.ShownKeymap;
             var alpha = editing ? Math.Max(keymap.Opacity, MinEditingAlpha) : keymap.Opacity;
@@ -118,6 +147,20 @@ public sealed class KeymapOverlay : Window
                     new Pen(new SolidColorBrush(Accent), 2) { DashStyle = new DashStyle([2, 1.5], 0) }, c, KeyRadius, KeyRadius);
                 DrawText(dc, "?", c, 1);
             }
+        }
+
+        /// The HP box (green, orange while HP reads low) and the potion dot, as in the MuMu AutoPots app.
+        void DrawAutoPots(DrawingContext dc, double w, double h)
+        {
+            var pots = owner.pots;
+            if (!pots.ShowsMarks || owner.keys.Device is not { } d) return;
+            double kx = w / d.Width, ky = h / d.Height;
+            var green = Color.FromRgb(0x34, 0xc7, 0x59);
+            if (pots.Box is { } box)
+                dc.DrawRectangle(null, new Pen(new SolidColorBrush(pots.ReadingLow ? Orange : green), 2),
+                    new Rect(box.X * kx, box.Y * ky, Math.Max(2, box.Width * kx), Math.Max(2, box.Height * ky)));
+            if (pots.Settings.Potion is { } potion)
+                dc.DrawEllipse(new SolidColorBrush(green), new Pen(Brushes.White, 1.5), new Point(potion.X * kx, potion.Y * ky), 7, 7);
         }
 
         static Brush A(Color c, double alpha) => new SolidColorBrush(Color.FromArgb((byte)(Math.Clamp(alpha, 0, 1) * 255), c.R, c.G, c.B));
