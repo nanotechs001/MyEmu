@@ -91,6 +91,8 @@ public static class HpDetector
     const float OrbTopMarginPerHeight = 0.13f;
     const float OrbHeightPerWidth = 2.25f;
     const float OrbMinBlue = 0.20f;
+    /// A red|red divider (no-mana orb) needs at least this many non-red pixels between the halves.
+    const int MinBarGap = 3;
     const float OrbDividerMin = 0.42f;
     const float OrbDividerMax = 0.58f;
     const float SearchTop = 0.40f;
@@ -171,20 +173,22 @@ public static class HpDetector
                 if (i < bw && rowCls[i] == OrbClass.Red) { run++; continue; }
                 if (run >= minChord)
                 {
-                    // The blue half must start within the divider-bar gap (red resuming means it wasn't one).
+                    // The other half must start within the divider-bar gap: blue (mana), or red for classes
+                    // without mana, whose orb is red on both sides; red resuming after a highlight speck isn't a bar.
                     int xb = -1;
                     int g = i;
                     int gEnd = Math.Min(bw - 1, i + maxGap);
                     while (g <= gEnd)
                     {
-                        if (rowCls[g] == OrbClass.Blue) { xb = g; break; }
+                        if (rowCls[g] == OrbClass.Blue || (rowCls[g] == OrbClass.Red && g - i >= MinBarGap)) { xb = g; break; }
                         if (rowCls[g] == OrbClass.Red) break;
                         g++;
                     }
                     if (xb >= 0)
                     {
+                        var half = rowCls[xb];
                         int k = xb;
-                        while (k < bw && rowCls[k] == OrbClass.Blue) k++;
+                        while (k < bw && rowCls[k] == half) k++;
                         if (k - xb >= minChord) hits.Add(new[] { y, x0 + i - 1, run, k - xb });
                     }
                 }
@@ -350,7 +354,7 @@ public static class HpDetector
         int blueCount = 0;
         for (int y = by0; y < by1; y++)
             for (int x = bx0; x < bx1; x++)
-                if (Classify(frame.Rgb(x, y)) == OrbClass.Blue) blueCount++;
+                if (Classify(frame.Rgb(x, y)) is OrbClass.Blue or OrbClass.Red) blueCount++; // red: a no-mana orb
         return (float)blueCount / ((by1 - by0) * (bx1 - bx0));
     }
 }

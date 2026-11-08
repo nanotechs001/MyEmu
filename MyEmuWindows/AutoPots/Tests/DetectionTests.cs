@@ -200,3 +200,26 @@ public class DetectionTests
         Assert.Null(SimpleHp.Decode("0101")); // pre-adaptive strings recalibrate
     }
 }
+
+public class NoManaOrbTests
+{
+    /// MyEmu on Windows, 1600×900: a class without mana, whose orb is red on both sides of the divider.
+    [Fact]
+    public void AutoDetectFindsAnAllRedOrbAndReadsADrain()
+    {
+        var frame = ArrayFrame.Load("no_mana_full.png");
+        var (change, message) = Calibration.Detect(() => frame, GameView.Orb);
+        Assert.True(change != null, message);
+        var s = change!(new AutoPotsSettings());
+        var box = s.OrbBox!;
+        // Measured red half x732…789, y745…873; the red potion bottle is at about (685, 835).
+        Assert.InRange(box.X, 728, 738);
+        Assert.InRange(box.Width, 50, 62);
+        Assert.InRange(s.OrbPotion!.X, 672, 698);
+        Assert.InRange(s.OrbPotion!.Y, 818, 850);
+        // HP drained from the top: darken the top 40% of the orb.
+        var px = frame.Px.ToArray();
+        for (int y = 745; y < 745 + 51; y++) for (int x = 700; x < 870; x++) px[y * frame.Width + x] = 0x101010;
+        Assert.True(HpDetector.HpFractionArc(frame with { Px = px }, box.X, box.Y, box.Width, box.Height) < 0.7f);
+    }
+}

@@ -4,7 +4,7 @@ namespace MyEmu.AutoPots;
 public static class Calibration
 {
     const int DetectSamples = 3, DetectTries = 5, DetectGapMs = 200;
-    /// A box that reads below this at full HP is nudged down until it doesn't (up to 40 px).
+    /// A box that reads below this at full HP has its top lowered until it doesn't (up to 40 px).
     const float FullHpGate = 0.97f;
     const int MaxNudgePx = 40;
     /// autopotsCO aims the orb potion 8 px below the computed point.
@@ -38,7 +38,8 @@ public static class Calibration
                 : "No HP orb found, but the simple-view HP text is there: switch Game view to Simple.");
         var box = Enumerable.Range(0, 4).Select(i => boxes.Select(b => b[i]).OrderBy(v => v).ElementAt(boxes.Count / 2)).ToArray();
         int nudge = 0;
-        while (HpDetector.HpFractionArc(frame, box[0], box[1], box[2], box[3]) < FullHpGate && nudge < MaxNudgePx) { box[1]++; nudge++; }
+        // Lower only the top edge: the box's top caught the rim; moving the whole box would push its bottom into the rim.
+        while (HpDetector.HpFractionArc(frame, box[0], box[1], box[2], box[3]) < FullHpGate && nudge < MaxNudgePx) { box[1]++; box[3]--; nudge++; }
         if (HpDetector.HpFractionArc(frame, box[0], box[1], box[2], box[3]) < FullHpGate)
             return (null, "Found the orb, but HP doesn't read full. Fill your HP, then Auto-detect again.");
         var orbBox = new PixelRect(box[0], box[1], box[2], box[3]);
