@@ -27,12 +27,30 @@ public partial class MainWindow : Window
     bool runningGuestAngle;
     string? currentApp; // the app in front in Android
     Task adbChain = Task.CompletedTask; // option commands run in order
-    bool loadingOptions;
+    bool loadingOptions = true; // controls fire change events while the XAML loads, before anything exists
+
+    readonly GameKeys gameKeys;
+    KeymapOverlay? overlay;
+    CancellationTokenSource? typingWatch, typingCheck;
 
     public MainWindow(string avd)
     {
         this.avd = avd;
         InitializeComponent();
+        gameKeys = new GameKeys(t => client?.Touch(t.Id, t.X, t.Y, t.Pressed),
+            () => options.GameKeysEnabled, on => { options.GameKeysEnabled = on; options.Save(); });
+        gameKeys.OnChange += () => { overlay?.Refresh(); ShowGameKeys(); };
+        gameKeys.OnLiveChange += WatchTyping;
+        Loaded += (_, _) =>
+        {
+            overlay = new KeymapOverlay(this, gameKeys);
+            overlay.Show();
+            PlaceOverlay();
+        };
+        Screen.LayoutUpdated += (_, _) => PlaceOverlay();
+        LocationChanged += (_, _) => PlaceOverlay();
+        Deactivated += (_, _) => gameKeys.ReleaseAll(); // keys released elsewhere never reach us
+        ShowGameKeys();
         ShowOptions();
         StateChanged += (_, _) => ApplyRate(); // minimized → background frame rate
         Loaded += async (_, _) => await StartAsync();
@@ -54,6 +72,7 @@ public partial class MainWindow : Window
             client = new EmulatorClient(engine.Port, engine.Token);
             frames = new FrameBuffer(engine.Size.Width * engine.Size.Height * 4);
             Status.Text = $"{avd} booting ({engine.Serial})";
+            gameKeys.Device = engine.Size;
             ShowOptions(); // the frame-rate list depends on the screen's rate
             ApplyOptions();
             _ = WatchForegroundAppAsync(engine.Serial);
@@ -64,7 +83,12 @@ public partial class MainWindow : Window
                 if (w != frameWidth || h != frameHeight)
                 {
                     (frameWidth, frameHeight) = (w, h);
-                    Dispatcher.BeginInvoke(FitScreen);
+                    Dispatcher.BeginInvoke(() =>
+                    {
+                        FitScreen();
+                        gameKeys.ReleaseAll();
+                        gameKeys.Device = new DeviceSize(w, h); // rotation
+                    });
                 }
                 Interlocked.Increment(ref frameCount);
             }, running.Token);
@@ -130,7 +154,141 @@ public partial class MainWindow : Window
     {
         if (package == null) return;
         currentApp = package;
+        gameKeys.AppDidChange(package);
+        ScheduleTypingCheck(); // the new app may open with a text box focused
         ApplyRate();
+    }
+
+    // --- Typing: game keys pause while a text field has Android's keyboard (Mac: EmulatorModel.watchTyping)
+
+    /// Watched only while game keys are live: it costs Android a little CPU.
+    void WatchTyping(bool live)
+    {
+        typingWatch?.Cancel();
+        typingWatch = null;
+        typingCheck?.Cancel();
+        gameKeys.TypingDidChange(false);
+        if (!live || engine is not { } e) return;
+        var watch = typingWatch = CancellationTokenSource.CreateLinkedTokenSource(running.Token);
+        _ = Task.Run(async () =>
+        {
+            while (!watch.IsCancellationRequested)
+            {
+                Dispatcher.Invoke(ScheduleTypingCheck); // a text box may already be open
+                try
+                {
+                    await foreach (var line in AndroidWatch.Lines(e.Serial, AndroidWatch.KeyboardEventsCommand, watch.Token))
+                        if (AndroidWatch.IsKeyboardRequest(line)) Dispatcher.Invoke(ScheduleTypingCheck);
+                }
+                catch (Exception ex) when (!watch.IsCancellationRequested) { Debug.WriteLine($"Typing watch ended: {ex.Message}"); }
+                catch { return; }
+                try { await Task.Delay(2000, watch.Token); } catch (OperationCanceledException) { return; }
+            }
+        });
+    }
+
+    /// One check at a time: a burst of keyboard requests gets one check, after the last.
+    void ScheduleTypingCheck()
+    {
+        if (typingWatch == null || engine is not { } e) return;
+        typingCheck?.Cancel();
+        var check = typingCheck = new CancellationTokenSource();
+        _ = Task.Run(async () =>
+        {
+            foreach (var delay in AndroidWatch.TypingProbeDelays)
+            {
+                try { await Task.Delay(delay, check.Token); } catch (OperationCanceledException) { return; }
+                string? reading = null;
+                try { reading = await Engine.AdbAsync(e.Serial, ["shell", AndroidWatch.TypingProbe]); } catch { } // next request retries
+                if (check.IsCancellationRequested) return; // a newer check is running
+                if (reading != null && AndroidWatch.IsTyping(reading) is { } typing) Dispatcher.Invoke(() => gameKeys.TypingDidChange(typing));
+            }
+        });
+    }
+
+    // --- Game keys UI
+
+    /// Keeps the key overlay exactly over the Android screen.
+    void PlaceOverlay()
+    {
+        if (overlay == null || PresentationSource.FromVisual(Screen) is not { CompositionTarget: { } target }) return;
+        var topLeft = target.TransformFromDevice.Transform(Screen.PointToScreen(new Point(0, 0)));
+        if (overlay.Left != topLeft.X || overlay.Top != topLeft.Y) (overlay.Left, overlay.Top) = (topLeft.X, topLeft.Y);
+        if (overlay.Width != Screen.ActualWidth || overlay.Height != Screen.ActualHeight)
+            (overlay.Width, overlay.Height) = (Math.Max(1, Screen.ActualWidth), Math.Max(1, Screen.ActualHeight));
+    }
+
+    void ShowGameKeys()
+    {
+        var keymap = gameKeys.ShownKeymap;
+        loadingOptions = true;
+        KeysApp.Text = gameKeys.CurrentApp is { } app ? $"Mapping for {app}" : "Waiting for Android…";
+        KeysEnabledBox.IsChecked = gameKeys.IsEnabled;
+        KeysEnabledBox.IsEnabled = !gameKeys.Keymap.IsEmpty;
+        EditKeysButton.Content = gameKeys.IsEditing ? "Save mapping (Ctrl+Shift+K)" : "Edit key mapping (Ctrl+Shift+K)";
+        var status = gameKeys.Message ?? (gameKeys.IsTyping ? "Paused while you type." : null);
+        KeysStatus.Text = status ?? "";
+        KeysStatus.Visibility = status == null ? Visibility.Collapsed : Visibility.Visible;
+        KeysSettings.Visibility = keymap.IsEmpty ? Visibility.Collapsed : Visibility.Visible;
+        BurstSlider.Value = keymap.BurstRate;
+        BurstLabel.Text = $"Burst speed: {keymap.BurstRate:0} taps/s";
+
+        EditorBar.Visibility = gameKeys.IsEditing ? Visibility.Visible : Visibility.Collapsed;
+        OpacitySlider.Value = keymap.Opacity;
+        var hasJoystick = keymap.Joystick != null;
+        AddJoystickButton.Visibility = hasJoystick ? Visibility.Collapsed : Visibility.Visible;
+        JoystickSizeLabel.Visibility = JoystickSlider.Visibility = hasJoystick ? Visibility.Visible : Visibility.Collapsed;
+        if (keymap.Joystick is { } joystick) JoystickSlider.Value = joystick.Radius;
+        var selectedTap = gameKeys.Selection is { KeyCode: { } code } ? keymap.Taps.FirstOrDefault(t => t.KeyCode == code) : null;
+        SelectionRow.Visibility = gameKeys.Selection == null ? Visibility.Collapsed : Visibility.Visible;
+        ModeBox.Visibility = selectedTap == null ? Visibility.Collapsed : Visibility.Visible;
+        SelectionLabel.Text = selectedTap != null ? $"Key {selectedTap.Label}" : "WASD joystick";
+        if (selectedTap != null) ModeBox.SelectedIndex = selectedTap.Mode == TapMode.Burst ? 1 : 0;
+        EditorHint.Text = gameKeys.Message ?? (gameKeys.PendingTap != null
+            ? "Now press the key for the marked spot."
+            : "Click empty space, then press a key to add it · Drag keys to move them · Click a key, then press another key to change it · Right-click or Delete removes · Alt-click places the WASD joystick");
+        loadingOptions = false;
+    }
+
+    void KeysEnabled_Click(object sender, RoutedEventArgs e) => gameKeys.IsEnabled = KeysEnabledBox.IsChecked == true;
+    void EditKeys_Click(object sender, RoutedEventArgs e) => gameKeys.ToggleEditing();
+    void SaveKeys_Click(object sender, RoutedEventArgs e) => gameKeys.SaveEdits();
+    void CancelKeys_Click(object sender, RoutedEventArgs e) => gameKeys.CancelEdits();
+    void AddJoystick_Click(object sender, RoutedEventArgs e) => gameKeys.AddJoystick();
+    void DeleteSelection_Click(object sender, RoutedEventArgs e) => gameKeys.DeleteSelection();
+
+    void ModeBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!loadingOptions && gameKeys.Selection is { KeyCode: { } code })
+            gameKeys.SetMode(ModeBox.SelectedIndex == 1 ? TapMode.Burst : TapMode.Hold, code);
+    }
+
+    void OpacitySlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (!loadingOptions) gameKeys.SetOpacity(e.NewValue);
+    }
+
+    void JoystickSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (!loadingOptions) gameKeys.SetJoystickRadius(e.NewValue);
+    }
+
+    // Outside the editor each change is saved, so the burst slider saves when the drag ends.
+    void BurstSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (loadingOptions) return;
+        BurstLabel.Text = $"Burst speed: {e.NewValue:0} taps/s";
+        if (gameKeys.IsEditing || !BurstSlider.IsMouseCaptureWithin) gameKeys.SetBurstRate(e.NewValue);
+    }
+
+    void KeySlider_DragCompleted(object sender, System.Windows.Controls.Primitives.DragCompletedEventArgs e) =>
+        gameKeys.SetBurstRate(BurstSlider.Value);
+
+    void ClearKeys_Click(object sender, RoutedEventArgs e)
+    {
+        if (MessageBox.Show(this, "This removes every key and the joystick from this game's mapping.", "Clear all game keys?",
+                MessageBoxButton.OKCancel, MessageBoxImage.Warning) == MessageBoxResult.OK)
+            gameKeys.Clear();
     }
 
     // --- Options panel
@@ -241,15 +399,28 @@ public partial class MainWindow : Window
             p = new Point(Math.Clamp(p.X, left, left + size.Width * scale - 1), Math.Clamp(p.Y, top, top + size.Height * scale - 1));
         }
         if (Pixels.DevicePoint(p.X, p.Y, ScreenArea.ActualWidth, ScreenArea.ActualHeight, size) is not { } d) return false;
-        client.Touch(0, d.X, d.Y, pressed);        return true;
+        client.Touch(KeyTouchMapper.MouseFingerId, d.X, d.Y, pressed);
+        return true;
     }
 
-    // --- Keys go to Android as Windows scan codes.
+    // --- Keys: game keys first, the rest go to Android as Windows scan codes.
 
     void OnKey(KeyEventArgs e, bool down)
     {
-        if (client == null || e.IsRepeat) return;
         var key = e.Key == Key.System ? e.SystemKey : e.Key;
+        if (down && Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && key is Key.K or Key.G)
+        {
+            if (key == Key.K) gameKeys.ToggleEditing();
+            else if (!gameKeys.Keymap.IsEmpty) gameKeys.IsEnabled = !gameKeys.IsEnabled;
+            e.Handled = true;
+            return;
+        }
+        if (MacKeys.From(key) is { } mac ? gameKeys.HandleKey(mac.Code, mac.Label, down, e.IsRepeat) : gameKeys.IsEditing)
+        {
+            e.Handled = true; // while editing, no key reaches Android
+            return;
+        }
+        if (client == null || e.IsRepeat) return;
         var scan = (int)MapVirtualKey((uint)KeyInterop.VirtualKeyFromKey(key), MapvkVkToVscEx);
         if (scan == 0) return;
         client.Key(scan, down);

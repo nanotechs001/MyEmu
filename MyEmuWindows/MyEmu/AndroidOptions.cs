@@ -32,6 +32,8 @@ public sealed class AndroidOptions
     /// Games' OpenGL ES runs as Vulkan (ANGLE in Android). Phase 0: same fps as OpenGL, ~half the GPU.
     /// Takes effect when Android next starts.
     public bool GuestAngle { get; set; } = true;
+    /// Game keys on (the mapping itself is per game, in keymaps\).
+    public bool GameKeysEnabled { get; set; }
 
     [JsonIgnore] public double EffectiveRenderScale => SuperLight ? SuperLightRenderScale : RenderScale;
     [JsonIgnore] public bool EffectiveLightweight => SuperLight || Lightweight;

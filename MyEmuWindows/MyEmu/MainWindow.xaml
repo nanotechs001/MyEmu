@@ -14,6 +14,35 @@
             </StackPanel>
             <TextBlock x:Name="Status" Foreground="#ccc" VerticalAlignment="Center" Margin="10,0"/>
         </DockPanel>
+        <!-- Key-mapping toolbar while editing (MEmu-style), above the screen. -->
+        <Border x:Name="EditorBar" DockPanel.Dock="Top" Background="#1e293b" Visibility="Collapsed" Padding="10,6">
+            <DockPanel>
+                <StackPanel Orientation="Horizontal" DockPanel.Dock="Right" VerticalAlignment="Center">
+                    <Button Content="Cancel" Width="70" Margin="4,0" Click="CancelKeys_Click" Focusable="False"/>
+                    <Button Content="Save" Width="70" Click="SaveKeys_Click" Focusable="False" FontWeight="SemiBold"/>
+                </StackPanel>
+                <StackPanel>
+                    <WrapPanel VerticalAlignment="Center">
+                        <TextBlock Text="Key opacity" Foreground="#e6e6e6" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                        <Slider x:Name="OpacitySlider" Width="120" Minimum="0.1" Maximum="1" Focusable="False" VerticalAlignment="Center"
+                                ValueChanged="OpacitySlider_ValueChanged"/>
+                        <Button x:Name="AddJoystickButton" Content="Add WASD joystick" Margin="14,0,0,0" Click="AddJoystick_Click" Focusable="False"/>
+                        <TextBlock x:Name="JoystickSizeLabel" Text="Joystick size" Foreground="#e6e6e6" VerticalAlignment="Center" Margin="14,0,6,0"/>
+                        <Slider x:Name="JoystickSlider" Width="120" Minimum="0.04" Maximum="0.2" Focusable="False" VerticalAlignment="Center"
+                                ValueChanged="JoystickSlider_ValueChanged"/>
+                        <StackPanel x:Name="SelectionRow" Orientation="Horizontal" Margin="14,0,0,0">
+                            <TextBlock x:Name="SelectionLabel" Foreground="#e6e6e6" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                            <ComboBox x:Name="ModeBox" Width="80" Focusable="False" SelectionChanged="ModeBox_SelectionChanged">
+                                <ComboBoxItem Content="Hold"/>
+                                <ComboBoxItem Content="Burst"/>
+                            </ComboBox>
+                            <Button Content="Delete" Margin="6,0,0,0" Click="DeleteSelection_Click" Focusable="False"/>
+                        </StackPanel>
+                    </WrapPanel>
+                    <TextBlock x:Name="EditorHint" Foreground="#9a9a9a" FontSize="11" Margin="0,4,0,0" TextWrapping="Wrap"/>
+                </StackPanel>
+            </DockPanel>
+        </Border>
         <!-- Docked beside the screen, not over it: the screen is a native child window that WPF can't draw on top of. -->
         <Border x:Name="OptionsPanel" DockPanel.Dock="Right" Width="300" Background="#1b1b1b" Visibility="Collapsed">
             <ScrollViewer VerticalScrollBarVisibility="Auto" Focusable="False">
@@ -28,7 +57,19 @@
                         <Style TargetType="ComboBox"><Setter Property="Focusable" Value="False"/></Style>
                     </StackPanel.Resources>
 
-                    <TextBlock Style="{StaticResource Heading}" Text="Frame rate" Margin="0,0,0,4"/>
+                    <TextBlock Style="{StaticResource Heading}" Text="Game keys" Margin="0,0,0,4"/>
+                    <TextBlock x:Name="KeysApp" Text="Waiting for Android…"/>
+                    <CheckBox x:Name="KeysEnabledBox" Content="Use game keys (Ctrl+Shift+G)" Click="KeysEnabled_Click"/>
+                    <Button x:Name="EditKeysButton" Content="Edit key mapping (Ctrl+Shift+K)" Margin="0,6,0,0" Click="EditKeys_Click" Focusable="False"/>
+                    <TextBlock x:Name="KeysStatus" Foreground="#f59e0b" Visibility="Collapsed"/>
+                    <StackPanel x:Name="KeysSettings">
+                        <TextBlock x:Name="BurstLabel" Text="Burst speed" Foreground="#e6e6e6" Margin="0,8,0,0"/>
+                        <Slider x:Name="BurstSlider" Minimum="2" Maximum="20" SmallChange="1" IsSnapToTickEnabled="True" TickFrequency="1"
+                                Focusable="False" ValueChanged="BurstSlider_ValueChanged" Thumb.DragCompleted="KeySlider_DragCompleted"/>
+                        <Button Content="Clear all keys…" Margin="0,6,0,0" Click="ClearKeys_Click" Focusable="False" HorizontalAlignment="Left"/>
+                    </StackPanel>
+
+                    <TextBlock Style="{StaticResource Heading}" Text="Frame rate"/>
                     <ComboBox x:Name="FpsBox" SelectionChanged="Option_Changed"/>
                     <CheckBox x:Name="MinimizedBox" Content="Drop to 30 fps when minimized" Click="Option_Changed"/>
                     <TextBlock x:Name="FpsNote" Text="Applied instantly, including to the game in front (Android otherwise holds games at 60, Xerion at 55)."/>

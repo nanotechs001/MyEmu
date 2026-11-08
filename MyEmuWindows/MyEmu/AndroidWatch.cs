@@ -11,6 +11,26 @@ public static class AndroidWatch
     /// One-shot read of the app already in front (the event stream only reports later switches).
     public const string ForegroundProbe = "dumpsys activity activities 2>/dev/null | grep -m1 topResumedActivity";
 
+    /// Android 15 logs each keyboard show/hide *request*; each one only triggers a `TypingProbe`.
+    public const string KeyboardEventsCommand = "logcat -v brief -T 1 -s ImeTracker:I";
+    /// The input type of the focused editor: a text type whenever a text field has focus. Costly inside
+    /// Android, so it runs only after keyboard requests, never on a timer.
+    public const string TypingProbe =
+        "dumpsys input_method 2>/dev/null | grep -m1 -A1 'mCurrentEditorInfo:' | grep -o 'inputType=0x[0-9a-f]*'";
+    /// Android updates the editor a moment after the request; the second look catches slow apps.
+    public static readonly TimeSpan[] TypingProbeDelays = [TimeSpan.FromMilliseconds(200), TimeSpan.FromSeconds(1)];
+
+    public static bool IsKeyboardRequest(string line) => line.Contains(": onRequestShow ") || line.Contains(": onRequestHide ");
+
+    /// "inputType=0x100001" → true (a text field has focus); "inputType=0x0" → false; anything else → null.
+    public static bool? IsTyping(string text)
+    {
+        text = text.Trim();
+        return text.StartsWith("inputType=0x") && uint.TryParse(text["inputType=0x".Length..], System.Globalization.NumberStyles.HexNumber, null, out var type)
+            ? (type & 0xF) != 0 // InputType.TYPE_MASK_CLASS: 0 (TYPE_NULL) when nothing takes text
+            : null;
+    }
+
     /// "[0,com.example.game/.MainActivity,reason]" → "com.example.game".
     public static string? ForegroundPackageFromEvent(string line)
     {

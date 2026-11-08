@@ -28,7 +28,15 @@ Status (2026-11-08, branch `windows-autopots`):
     own game mode on every app switch. Checked in Xerion: game mode fps 165 / scale 0.85 (its override
     was 55), Super Light → 30 / 0.1 / animations off, minimized → 30, restored → 165.
   - Later: gfxstream's render window inside ours (no readback at all) — see "Display" below.
-  - Not yet: instances, display/device/CPU-memory settings, keymaps, AutoPots, spoofing, game speed
+  - Game keys (port of Keymap/GameKeys/KeymapOverlayView/editor bar): per-game
+    `%LOCALAPPDATA%\MyEmu\keymaps\<package>.json` in the Mac's exact JSON, with Mac key codes
+    (`MacKeys` maps Windows keys; modifiers aren't mappable, as on the Mac). Hold/Burst keys, WASD
+    joystick, editor (click a spot + key, drag, right-click/Delete, Alt-click joystick), Ctrl+Shift+K
+    edit/save, Ctrl+Shift+G on/off, paused while a text field has the keyboard (ImeTracker watch).
+    The keys are drawn by `KeymapOverlay`, a transparent owned window over the screen (WPF can't draw
+    over the D3D child): click-through while playing, takes clicks while editing, never takes focus.
+    Checked in Xerion: N mapped onto Notice opens it; clicks still reach the game through the overlay.
+  - Not yet: instances, display/device/CPU-memory settings, AutoPots, spoofing, game speed
     (needs the Custom-model profile), MCP, installer; renderer change needs an in-app Android restart.
 The Mac app in `MyEmu/` is Swift/AppKit/Metal and cannot be compiled for Windows — the Windows
 version is a new native app that reuses MyEmu's file formats, engine commands and test fixtures.
