@@ -6,12 +6,58 @@
     <DockPanel>
         <DockPanel DockPanel.Dock="Top" Background="#222" LastChildFill="True">
             <StackPanel Orientation="Horizontal" DockPanel.Dock="Right" Margin="4">
+                <ToggleButton x:Name="OptionsButton" Content="Options" Width="72" Margin="2,2,10,2" Focusable="False"
+                              Checked="OptionsButton_Toggled" Unchecked="OptionsButton_Toggled"/>
                 <Button Content="Back" Width="64" Margin="2" Click="Back_Click" Focusable="False"/>
                 <Button Content="Home" Width="64" Margin="2" Click="Home_Click" Focusable="False"/>
                 <Button Content="Recents" Width="64" Margin="2" Click="Recents_Click" Focusable="False"/>
             </StackPanel>
             <TextBlock x:Name="Status" Foreground="#ccc" VerticalAlignment="Center" Margin="10,0"/>
         </DockPanel>
+        <!-- Docked beside the screen, not over it: the screen is a native child window that WPF can't draw on top of. -->
+        <Border x:Name="OptionsPanel" DockPanel.Dock="Right" Width="300" Background="#1b1b1b" Visibility="Collapsed">
+            <ScrollViewer VerticalScrollBarVisibility="Auto" Focusable="False">
+                <StackPanel Margin="14,10">
+                    <StackPanel.Resources>
+                        <Style TargetType="TextBlock"><Setter Property="Foreground" Value="#9a9a9a"/><Setter Property="TextWrapping" Value="Wrap"/>
+                            <Setter Property="FontSize" Value="11"/><Setter Property="Margin" Value="0,2,0,0"/></Style>
+                        <Style x:Key="Heading" TargetType="TextBlock"><Setter Property="Foreground" Value="#e6e6e6"/>
+                            <Setter Property="FontWeight" Value="SemiBold"/><Setter Property="Margin" Value="0,14,0,4"/></Style>
+                        <Style TargetType="CheckBox"><Setter Property="Foreground" Value="#e6e6e6"/><Setter Property="Focusable" Value="False"/>
+                            <Setter Property="Margin" Value="0,4,0,0"/></Style>
+                        <Style TargetType="ComboBox"><Setter Property="Focusable" Value="False"/></Style>
+                    </StackPanel.Resources>
+
+                    <TextBlock Style="{StaticResource Heading}" Text="Frame rate" Margin="0,0,0,4"/>
+                    <ComboBox x:Name="FpsBox" SelectionChanged="Option_Changed"/>
+                    <CheckBox x:Name="MinimizedBox" Content="Drop to 30 fps when minimized" Click="Option_Changed"/>
+                    <TextBlock x:Name="FpsNote" Text="Applied instantly, including to the game in front (Android otherwise holds games at 60, Xerion at 55)."/>
+
+                    <TextBlock Style="{StaticResource Heading}" Text="Game render scale"/>
+                    <ComboBox x:Name="RenderScaleBox" SelectionChanged="Option_Changed"/>
+                    <TextBlock Text="Games draw at this share of the screen and Android scales them up: less GPU, slightly softer. Below 50% text gets blurry. Takes effect when a game next starts."/>
+
+                    <TextBlock Style="{StaticResource Heading}" Text="Super Light"/>
+                    <CheckBox x:Name="SuperLightBox" Content="Super Light mode" Click="Option_Changed"/>
+                    <TextBlock Text="For farming and many instances: games draw at 10%, 30 fps, Android animations and unused apps off. Off brings your own settings back."/>
+
+                    <TextBlock Style="{StaticResource Heading}" Text="Lightweight Android"/>
+                    <CheckBox x:Name="LightweightBox" Content="Switch off unused apps" Click="Option_Changed"/>
+                    <TextBlock Text="Turns off 30 Google apps a game emulator doesn't need (Assistant, Wellbeing, Gmail, YouTube…), about 600 MB. Play Store, Chrome, sign-in and the keyboard stay."/>
+
+                    <TextBlock Style="{StaticResource Heading}" Text="Keyboard"/>
+                    <CheckBox x:Name="KeyboardOnlyBox" Content="PC keyboard only" Click="Option_Changed"/>
+                    <TextBlock Text="Android's on-screen keyboard stays hidden; you type on this PC's keyboard."/>
+
+                    <TextBlock Style="{StaticResource Heading}" Text="Renderer"/>
+                    <ComboBox x:Name="RendererBox" SelectionChanged="Option_Changed">
+                        <ComboBoxItem Content="Vulkan (less GPU)"/>
+                        <ComboBoxItem Content="OpenGL"/>
+                    </ComboBox>
+                    <TextBlock x:Name="RendererNote" Text="Vulkan ran Xerion at the same fps as OpenGL with about half the GPU. Use OpenGL only if a game draws incorrectly."/>
+                </StackPanel>
+            </ScrollViewer>
+        </Border>
         <Grid x:Name="ScreenArea" Background="Black" SizeChanged="ScreenArea_SizeChanged"
               MouseLeftButtonDown="Screen_MouseDown" MouseMove="Screen_MouseMove" MouseLeftButtonUp="Screen_MouseUp">
             <local:D3DScreen x:Name="Screen" HorizontalAlignment="Center" VerticalAlignment="Center" Width="0" Height="0"/>

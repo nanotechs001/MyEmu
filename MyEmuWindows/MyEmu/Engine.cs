@@ -39,7 +39,7 @@ public static class Engine
     public static readonly IReadOnlyDictionary<string, string> EnforcedConfig =
         new Dictionary<string, string> { ["hw.device.name"] = "", ["hw.gltransport"] = "asg" };
 
-    public static async Task<EngineInstance> StartAsync(string avd, int port, int refreshRate, CancellationToken cancel = default)
+    public static async Task<EngineInstance> StartAsync(string avd, int port, int refreshRate, bool guestAngle, CancellationToken cancel = default)
     {
         if (!File.Exists(EmulatorExe)) throw new FileNotFoundException($"Emulator engine not found at {EmulatorExe}.");
         var configPath = ConfigPath(avd);
@@ -58,7 +58,7 @@ public static class Engine
             UseShellExecute = false, CreateNoWindow = true,
             RedirectStandardOutput = true, RedirectStandardError = true, RedirectStandardInput = true,
         };
-        foreach (var arg in Arguments(avd, port, refreshRate)) info.ArgumentList.Add(arg);
+        foreach (var arg in Arguments(avd, port, refreshRate, guestAngle)) info.ArgumentList.Add(arg);
         var launchedAt = DateTime.Now.AddSeconds(-1); // file times are coarse
         var process = Process.Start(info)!;
         process.StandardInput.Close(); // the engine must not read ours

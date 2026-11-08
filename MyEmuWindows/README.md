@@ -20,10 +20,16 @@ Status (2026-11-08, branch `windows-autopots`):
     redraws at most ~60 Hz and the copy cost ~10 ms per frame (46 sent → 24 shown). Clicks pass
     through the child window to WPF (HTTRANSPARENT).
   - Xerion's start screen: Android itself presents ~33 fps (SurfaceFlinger timestats), and the window
-    shows all of them. Android's game mode also caps Xerion at 55 fps (`frameRateOverride`); the Mac's
-    game-fps option (`AndroidOptions.swift`) still has to be ported.
+    shows all of them.
+  - Options panel (port of `AndroidOptions.swift` + the apply/watch parts of `EmulatorModel`), saved in
+    `%LOCALAPPDATA%\MyEmu\settings.json`: frame-rate limit, 30 fps when minimized, game render scale,
+    Super Light, Lightweight (debloat), PC keyboard only, renderer (Vulkan/OpenGL, next start). Applied
+    at boot and live; a foreground-app watch (logcat `wm_set_resumed_activity`) re-applies the game's
+    own game mode on every app switch. Checked in Xerion: game mode fps 165 / scale 0.85 (its override
+    was 55), Super Light → 30 / 0.1 / animations off, minimized → 30, restored → 165.
   - Later: gfxstream's render window inside ours (no readback at all) — see "Display" below.
-  - Not yet: instances, settings drawers, keymaps, AutoPots, spoofing, game speed, MCP, installer.
+  - Not yet: instances, display/device/CPU-memory settings, keymaps, AutoPots, spoofing, game speed
+    (needs the Custom-model profile), MCP, installer; renderer change needs an in-app Android restart.
 The Mac app in `MyEmu/` is Swift/AppKit/Metal and cannot be compiled for Windows — the Windows
 version is a new native app that reuses MyEmu's file formats, engine commands and test fixtures.
 

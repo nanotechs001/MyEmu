@@ -1,9 +1,8 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Input;
-using System.Windows.Media;
-using System.Windows.Media.Imaging;
 
 namespace MyEmu;
 
@@ -23,10 +22,19 @@ public partial class MainWindow : Window
     long fpsReceived;
     bool stopping;
 
+    readonly AndroidOptions options = AndroidOptions.Load();
+    int displayMaxFps = 60;
+    bool runningGuestAngle;
+    string? currentApp; // the app in front in Android
+    Task adbChain = Task.CompletedTask; // option commands run in order
+    bool loadingOptions;
+
     public MainWindow(string avd)
     {
         this.avd = avd;
         InitializeComponent();
+        ShowOptions();
+        StateChanged += (_, _) => ApplyRate(); // minimized → background frame rate
         Loaded += async (_, _) => await StartAsync();
         Closing += OnClosing;
         PreviewKeyDown += (_, e) => OnKey(e, down: true);
@@ -39,13 +47,16 @@ public partial class MainWindow : Window
     {
         try
         {
-            var hz = RefreshRate();
+            displayMaxFps = RefreshRate();
             Status.Text = $"Starting {avd}...";
-            engine = await Engine.StartAsync(avd, GrpcPort, hz, running.Token);
+            runningGuestAngle = options.GuestAngle;
+            engine = await Engine.StartAsync(avd, GrpcPort, displayMaxFps, runningGuestAngle, running.Token);
             client = new EmulatorClient(engine.Port, engine.Token);
             frames = new FrameBuffer(engine.Size.Width * engine.Size.Height * 4);
             Status.Text = $"{avd} booting ({engine.Serial})";
-            _ = AfterBootAsync(engine.Serial, hz);
+            ShowOptions(); // the frame-rate list depends on the screen's rate
+            ApplyOptions();
+            _ = WatchForegroundAppAsync(engine.Serial);
             var size = engine.Size;
             await client.StreamFramesAsync(frames, size, (w, h) => // frame thread
             {
@@ -66,16 +77,116 @@ public partial class MainWindow : Window
         catch { } // closing
     }
 
-    /// Same as the Mac app at every boot: Android renders at the screen's rate, and the guest graphics
-    /// driver stops logging two lines per frame from the game's render thread.
-    async Task AfterBootAsync(string serial, int hz)
+    // --- Android options (Mac: EmulatorModel.applyAndroidOptions / applyAndroidRate / watchForegroundApp)
+
+    /// Runs an adb shell command once Android has booted, after the ones queued before it.
+    void RunInAndroid(string command)
     {
-        try
+        if (engine is not { } e) return;
+        adbChain = adbChain.ContinueWith(async _ =>
         {
-            await Engine.AdbShellAfterBootAsync(serial,
-                $"setprop log.tag.MESA W; settings put system peak_refresh_rate {hz}.0; settings put system min_refresh_rate {hz}.0");
+            try { await Engine.AdbShellAfterBootAsync(e.Serial, command); }
+            catch (Exception ex) { Debug.WriteLine($"Android command failed: {ex.Message}"); }
+        }).Unwrap();
+    }
+
+    /// Everything the options set in Android. Idempotent, so it runs at every boot and every change.
+    void ApplyOptions()
+    {
+        RunInAndroid(string.Join("; ", AndroidCommands.QuietGraphicsLog, AndroidCommands.KeepScreenOrientation,
+            AndroidCommands.KeyboardOnly(options.KeyboardOnly), AndroidCommands.Lightweight(options.EffectiveLightweight),
+            AndroidCommands.Animations(!options.SuperLight)));
+        ApplyRate();
+    }
+
+    /// Android's refresh rate, and the game in front's own frame rate and render scale.
+    void ApplyRate()
+    {
+        var rate = options.AndroidFps(displayMaxFps, WindowState == WindowState.Minimized);
+        var command = AndroidCommands.RefreshRate(rate);
+        if (currentApp != null) command += "; " + AndroidCommands.GameMode(rate, options.EffectiveRenderScale, currentApp);
+        RunInAndroid(command);
+    }
+
+    /// Re-applies the game frame rate whenever another app comes to the front.
+    async Task WatchForegroundAppAsync(string serial)
+    {
+        while (!running.IsCancellationRequested)
+        {
+            try
+            {
+                // The event stream reports only later switches; read the app already in front once.
+                AppInFront(AndroidWatch.ForegroundPackageFromDump(await Engine.AdbAsync(serial, ["wait-for-device", "shell", AndroidWatch.ForegroundProbe])));
+                await foreach (var line in AndroidWatch.Lines(serial, AndroidWatch.ForegroundCommand, running.Token))
+                    AppInFront(AndroidWatch.ForegroundPackageFromEvent(line));
+            }
+            catch (Exception e) when (!running.IsCancellationRequested) { Debug.WriteLine($"Foreground watch ended: {e.Message}"); }
+            catch { return; }
+            try { await Task.Delay(2000, running.Token); } catch (OperationCanceledException) { return; }
         }
-        catch (Exception e) { Debug.WriteLine($"After-boot setup failed: {e.Message}"); }
+    }
+
+    void AppInFront(string? package)
+    {
+        if (package == null) return;
+        currentApp = package;
+        ApplyRate();
+    }
+
+    // --- Options panel
+
+    void OptionsButton_Toggled(object sender, RoutedEventArgs e)
+    {
+        OptionsPanel.Visibility = OptionsButton.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    /// Fills the panel from the saved options.
+    void ShowOptions()
+    {
+        loadingOptions = true;
+        FpsBox.Items.Clear();
+        FpsBox.Items.Add(new ComboBoxItem { Content = $"Max ({displayMaxFps} fps)", Tag = 0 });
+        foreach (var fps in AndroidOptions.FpsChoices.Where(f => f < displayMaxFps))
+            FpsBox.Items.Add(new ComboBoxItem { Content = $"{fps} fps", Tag = fps });
+        FpsBox.SelectedItem = FpsBox.Items.Cast<ComboBoxItem>().FirstOrDefault(i => (int)i.Tag == options.FpsCap) ?? FpsBox.Items[0];
+        if (RenderScaleBox.Items.Count == 0)
+            foreach (var scale in AndroidOptions.RenderScales)
+                RenderScaleBox.Items.Add(new ComboBoxItem
+                {
+                    Content = scale >= 1 ? "100% (sharpest)" : scale <= 0.1 ? "10% (fastest, very blurry)" : $"{Math.Round(scale * 100)}%",
+                    Tag = scale,
+                });
+        RenderScaleBox.SelectedItem = RenderScaleBox.Items.Cast<ComboBoxItem>().First(i => (double)i.Tag == options.RenderScale);
+        MinimizedBox.IsChecked = options.LowerFpsWhenMinimized;
+        SuperLightBox.IsChecked = options.SuperLight;
+        LightweightBox.IsChecked = options.Lightweight;
+        KeyboardOnlyBox.IsChecked = options.KeyboardOnly;
+        RendererBox.SelectedIndex = options.GuestAngle ? 0 : 1;
+        UpdateOptionNotes();
+        loadingOptions = false;
+    }
+
+    void Option_Changed(object sender, RoutedEventArgs e)
+    {
+        if (loadingOptions) return;
+        options.FpsCap = (int)((ComboBoxItem)FpsBox.SelectedItem).Tag;
+        options.RenderScale = (double)((ComboBoxItem)RenderScaleBox.SelectedItem).Tag;
+        options.LowerFpsWhenMinimized = MinimizedBox.IsChecked == true;
+        options.SuperLight = SuperLightBox.IsChecked == true;
+        options.Lightweight = LightweightBox.IsChecked == true;
+        options.KeyboardOnly = KeyboardOnlyBox.IsChecked == true;
+        options.GuestAngle = RendererBox.SelectedIndex == 0;
+        options.Save();
+        UpdateOptionNotes();
+        ApplyOptions();
+    }
+
+    void UpdateOptionNotes()
+    {
+        FpsBox.IsEnabled = RenderScaleBox.IsEnabled = !options.SuperLight;
+        RendererNote.Text = engine != null && runningGuestAngle != options.GuestAngle
+            ? "Takes effect the next time MyEmu starts Android."
+            : "Vulkan ran Xerion at the same fps as OpenGL with about half the GPU. Use OpenGL only if a game draws incorrectly.";
     }
 
     /// Keeps the screen window at Android's aspect ratio, centered (DXGI stretches the frame to it).
