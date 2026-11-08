@@ -16,12 +16,13 @@
     <PackageReference Include="Google.Protobuf" Version="3.28.3" />
     <PackageReference Include="Grpc.Net.Client" Version="2.66.0" />
     <PackageReference Include="Grpc.Tools" Version="2.67.0" PrivateAssets="All" />
+    <PackageReference Include="Vortice.Direct3D11" Version="3.8.3" />
+    <PackageReference Include="Vortice.DXGI" Version="3.8.3" />
   </ItemGroup>
 
   <!-- The same engine API the Mac app uses. -->
   <ItemGroup>
-    <Protobuf Include="..\..\MyEmu\Sources\MyEmu\emulator_controller.proto" Link="emulator_controller.proto"
-              GrpcServices="Client" />
+    <Protobuf Include="..\..\MyEmu\Sources\MyEmu\emulator_controller.proto" Link="emulator_controller.proto" GrpcServices="Client" />
   </ItemGroup>
 
 </Project>

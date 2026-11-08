@@ -13,9 +13,16 @@ Status (2026-11-08, branch `windows-autopots`):
   - Frames: gRPC `streamScreenshot` with the MMAP transport. On Windows the handle must be
     `file://C:\...` (the engine strips `file://`), the file must not be DeleteOnClose, and the engine's
     writes are only visible through a freshly opened handle (not a mapped view, not a kept handle), so
-    each frame is read back. ~1 ms per 1600×900 frame; RGBA→BGRA with SIMD into a WriteableBitmap.
-  - Known: WPF shows fewer frames than the engine sends (e.g. 46 → 24 fps); next step is drawing with
-    D3D11 or putting gfxstream's render window into ours (see "Display" below).
+    each frame is read back (~1 ms per 1600×900 frame).
+  - Drawing: `D3DScreen` — a child HWND with a D3D11 flip-model swap chain (RGBA, frame-sized, DXGI
+    stretches it; the window is kept at Android's aspect ratio). Each frame is uploaded and presented
+    from the frame thread, so every frame Android sends is shown. WPF's WriteableBitmap couldn't: WPF
+    redraws at most ~60 Hz and the copy cost ~10 ms per frame (46 sent → 24 shown). Clicks pass
+    through the child window to WPF (HTTRANSPARENT).
+  - Xerion's start screen: Android itself presents ~33 fps (SurfaceFlinger timestats), and the window
+    shows all of them. Android's game mode also caps Xerion at 55 fps (`frameRateOverride`); the Mac's
+    game-fps option (`AndroidOptions.swift`) still has to be ported.
+  - Later: gfxstream's render window inside ours (no readback at all) — see "Display" below.
   - Not yet: instances, settings drawers, keymaps, AutoPots, spoofing, game speed, MCP, installer.
 The Mac app in `MyEmu/` is Swift/AppKit/Metal and cannot be compiled for Windows — the Windows
 version is a new native app that reuses MyEmu's file formats, engine commands and test fixtures.

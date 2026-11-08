@@ -21,16 +21,6 @@ public class CoreTests
     }
 
     [Fact]
-    public void RgbaToBgraSwapsRedAndBlueIncludingTheTail()
-    {
-        var rgba = Enumerable.Range(0, 5 * 4).Select(i => (byte)i).ToArray(); // 5 pixels: one SIMD block + 1
-        var bgra = new byte[rgba.Length];
-        Pixels.RgbaToBgra(rgba, bgra);
-        for (var p = 0; p < 5; p++)
-            Assert.Equal(new[] { rgba[p * 4 + 2], rgba[p * 4 + 1], rgba[p * 4], rgba[p * 4 + 3] }, bgra[(p * 4)..(p * 4 + 4)]);
-    }
-
-    [Fact]
     public void DevicePointMapsAspectFitAndRejectsLetterbox()
     {
         var size = new DeviceSize(1600, 900);

@@ -98,8 +98,6 @@ public sealed class FrameBuffer : IDisposable
     readonly string path;
     public byte[] Pixels { get; }
     public int Length => Pixels.Length;
-    /// Lock while reading or using `Pixels`.
-    public object Sync { get; } = new();
     /// The engine strips "file://", so file:///C:/... would leave "/C:/...".
     public string Handle => "file://" + path;
 
@@ -114,13 +112,10 @@ public sealed class FrameBuffer : IDisposable
     public void ReadFrame(int bytes)
     {
         using var handle = File.OpenHandle(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-        lock (Sync) RandomAccess.Read(handle, Pixels.AsSpan(0, bytes), 0);
+        RandomAccess.Read(handle, Pixels.AsSpan(0, bytes), 0);
     }
 
-    public void CopyFrom(ReadOnlySpan<byte> source)
-    {
-        lock (Sync) source.CopyTo(Pixels);
-    }
+    public void CopyFrom(ReadOnlySpan<byte> source) => source.CopyTo(Pixels);
 
     public void Dispose()
     {

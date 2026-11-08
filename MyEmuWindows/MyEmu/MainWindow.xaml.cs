@@ -17,11 +17,10 @@ public partial class MainWindow : Window
     EngineInstance? engine;
     EmulatorClient? client;
     FrameBuffer? frames;
-    WriteableBitmap? bitmap;
-    long frameCount, shownCount; // written by the frame stream, read on the UI thread
+    long frameCount; // written by the frame stream, read on the UI thread
     int frameWidth, frameHeight;
     readonly Stopwatch fpsClock = Stopwatch.StartNew();
-    long fpsFrames, fpsReceived;
+    long fpsReceived;
     bool stopping;
 
     public MainWindow(string avd)
@@ -32,7 +31,6 @@ public partial class MainWindow : Window
         Closing += OnClosing;
         PreviewKeyDown += (_, e) => OnKey(e, down: true);
         PreviewKeyUp += (_, e) => OnKey(e, down: false);
-        CompositionTarget.Rendering += ShowLatestFrame;
         new System.Windows.Threading.DispatcherTimer(TimeSpan.FromSeconds(1), System.Windows.Threading.DispatcherPriority.Normal,
             (_, _) => UpdateFps(), Dispatcher).Start();
     }
@@ -48,9 +46,15 @@ public partial class MainWindow : Window
             frames = new FrameBuffer(engine.Size.Width * engine.Size.Height * 4);
             Status.Text = $"{avd} booting ({engine.Serial})";
             _ = AfterBootAsync(engine.Serial, hz);
-            await client.StreamFramesAsync(frames, engine.Size, (w, h) =>
+            var size = engine.Size;
+            await client.StreamFramesAsync(frames, size, (w, h) => // frame thread
             {
-                frameWidth = w; frameHeight = h;
+                Screen.Present(frames.Pixels, w, h);
+                if (w != frameWidth || h != frameHeight)
+                {
+                    (frameWidth, frameHeight) = (w, h);
+                    Dispatcher.BeginInvoke(FitScreen);
+                }
                 Interlocked.Increment(ref frameCount);
             }, running.Token);
             if (!stopping) Status.Text = "The engine stopped sending frames.";
@@ -74,34 +78,24 @@ public partial class MainWindow : Window
         catch (Exception e) { Debug.WriteLine($"After-boot setup failed: {e.Message}"); }
     }
 
-    /// Copies the newest frame once per WPF render, so slow UI never queues frames up.
-    unsafe void ShowLatestFrame(object? sender, EventArgs e)
+    /// Keeps the screen window at Android's aspect ratio, centered (DXGI stretches the frame to it).
+    void FitScreen()
     {
-        var count = Interlocked.Read(ref frameCount);
-        if (count == shownCount || frames == null) return;
-        shownCount = count;
-        int w = frameWidth, h = frameHeight;
-        if (bitmap == null || bitmap.PixelWidth != w || bitmap.PixelHeight != h)
-        {
-            bitmap = new WriteableBitmap(w, h, 96, 96, PixelFormats.Bgr32, null);
-            Screen.Source = bitmap;
-        }
-        bitmap.Lock();
-        lock (frames.Sync) Pixels.RgbaToBgra(frames.Pixels.AsSpan(0, w * h * 4), new Span<byte>((void*)bitmap.BackBuffer, w * h * 4));
-        bitmap.AddDirtyRect(new Int32Rect(0, 0, w, h));
-        bitmap.Unlock();
-        fpsFrames++;
+        if (frameWidth == 0) return;
+        var scale = Math.Min(ScreenArea.ActualWidth / frameWidth, ScreenArea.ActualHeight / frameHeight);
+        Screen.Width = Math.Max(1, frameWidth * scale);
+        Screen.Height = Math.Max(1, frameHeight * scale);
     }
 
-    /// Once a second: frames the engine sent vs frames we drew.
+    void ScreenArea_SizeChanged(object sender, SizeChangedEventArgs e) => FitScreen();
+
+    /// Once a second: frames Android sent (each one is drawn as it arrives).
     void UpdateFps()
     {
-        if (bitmap == null || stopping) return;
+        if (frameWidth == 0 || stopping) return;
         var received = Interlocked.Read(ref frameCount);
-        var seconds = fpsClock.Elapsed.TotalSeconds;
-        Status.Text = $"{avd} · {frameWidth}×{frameHeight} · {(received - fpsReceived) / seconds:0} fps from Android, {fpsFrames / seconds:0} shown";
+        Status.Text = $"{avd} · {frameWidth}×{frameHeight} · {(received - fpsReceived) / fpsClock.Elapsed.TotalSeconds:0} fps";
         fpsReceived = received;
-        fpsFrames = 0;
         fpsClock.Restart();
     }
 
