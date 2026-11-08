@@ -38,11 +38,12 @@ struct InstanceList: Codable, Equatable, Sendable {
         instances.first { $0.id == id }
     }
 
-    /// Adds "Android <n>" with the next unused number; nil at the limit.
-    mutating func add(id: String = UUID().uuidString) -> Instance? {
+    /// Adds "Android <n>" (or `name`) with the next unused number; nil at the limit.
+    mutating func add(id: String = UUID().uuidString, name: String? = nil) -> Instance? {
         guard canAdd else { return nil }
         let number = (instances.map(\.number).max() ?? 0) + 1
-        let instance = Instance(id: id, name: "Android \(number)", number: number)
+        let instance = Instance(id: id, name: name.map { String($0.prefix(Self.maxNameLength)) } ?? "Android \(number)",
+                                number: number)
         instances.append(instance)
         return instance
     }

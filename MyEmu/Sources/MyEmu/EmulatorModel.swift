@@ -49,7 +49,7 @@ final class EmulatorModel {
         static let fpsCap = "fpsCap", lowerFPSInBackground = "lowerFPSInBackground", showFPS = "showFPS"
         static let colorIntensity = "colorIntensity"
         static let profile = "deviceProfile", identity = "deviceIdentity"
-        static let phoneLine = "phoneLine", cutout = "cutout"
+        static let phoneLine = "phoneLine", cutout = "cutout", gameSpeed = "gameSpeed"
     }
 
     /// Which Android this window runs (its AVDs, port and profile).
@@ -123,6 +123,15 @@ final class EmulatorModel {
         }
     }
 
+    /// How fast this instance's current game runs (1.0 = normal). Per instance, so each window keeps
+    /// its own speed. Injected per game; custom-model profile only. Applies live to the running game.
+    var gameSpeed: Double {
+        didSet {
+            UserDefaults.standard.set(gameSpeed, forKey: instance.defaultsKey(DefaultsKey.gameSpeed))
+            applyGameSpeed()
+        }
+    }
+
     var selectedDrawer: Drawer? {
         didSet {
             autoPots.isPreviewing = selectedDrawer == .autoPots // live HP reading while its drawer is open
@@ -143,6 +152,8 @@ final class EmulatorModel {
     @ObservationIgnored private var frames: SharedFrameBuffer?
     @ObservationIgnored private var display: DirectDisplay?
     @ObservationIgnored private var engine: EngineInstance?
+    /// This instance's adb serial while its engine runs (the MCP server drives Android through it).
+    var adbSerial: String? { engine?.serial }
     @ObservationIgnored private var client: EmulatorClient?
     @ObservationIgnored private var tasks: [Task<Void, Never>] = []
     @ObservationIgnored private var rateTask: Task<Void, Never>?
@@ -156,6 +167,7 @@ final class EmulatorModel {
     private(set) var notice: String?
     @ObservationIgnored private var identityTask: Task<Void, Never>?
     @ObservationIgnored private var optionsTask: Task<Void, Never>?
+    @ObservationIgnored private var speedTask: Task<Void, Never>?
 
     init(instance: Instance) {
         self.instance = instance
@@ -179,6 +191,8 @@ final class EmulatorModel {
             .flatMap { $0.problem == nil ? $0 : nil } ?? PhoneLine()
         (phoneLine, draftPhoneLine) = (savedLine, savedLine)
         cutout = defaults.string(forKey: instance.defaultsKey(DefaultsKey.cutout)).flatMap(CutoutStyle.init) ?? .none
+        let savedSpeed = defaults.double(forKey: instance.defaultsKey(DefaultsKey.gameSpeed))
+        gameSpeed = AndroidOptions.gameSpeeds.contains(savedSpeed) ? savedSpeed : 1.0
         screen.gameKeys = gameKeys
         screen.autoPots = autoPots
         screen.showsFPS = showFPS
@@ -187,8 +201,19 @@ final class EmulatorModel {
     }
 
     /// Forgets a deleted instance's own settings.
+    private static let instanceSettings = [DefaultsKey.profile, DefaultsKey.identity, DefaultsKey.phoneLine, DefaultsKey.cutout, DefaultsKey.gameSpeed]
+
+    /// A cloned instance starts with the original's profile, phone model, phone line, cutout and game speed.
+    static func copySettings(from source: Instance, to target: Instance, defaults: UserDefaults = .standard) {
+        for key in instanceSettings {
+            if let value = defaults.object(forKey: source.defaultsKey(key)) {
+                defaults.set(value, forKey: target.defaultsKey(key))
+            }
+        }
+    }
+
     static func removeSettings(of instance: Instance) {
-        for key in [DefaultsKey.profile, DefaultsKey.identity, DefaultsKey.phoneLine, DefaultsKey.cutout] {
+        for key in instanceSettings {
             UserDefaults.standard.removeObject(forKey: instance.defaultsKey(key))
         }
     }
@@ -296,13 +321,12 @@ final class EmulatorModel {
     private func watchForegroundApp(serial: String) async {
         while !Task.isCancelled {
             do {
+                // The event stream reports only future app switches, so a game already in front when we
+                // attach is never seen — without this, speed/FPS/keymaps never apply on an instance you
+                // didn't switch apps in (e.g. every instance after the first). Read the current app once.
+                if let package = try? await Engine.foregroundApp(serial: serial) { foregroundDidChange(package) }
                 for try await line in AndroidWatch.lines(serial: serial, command: AndroidWatch.foregroundCommand) {
-                    if let package = AndroidWatch.foregroundPackage(fromEvent: line) {
-                        gameKeys.appDidChange(package)
-                        autoPots.appDidChange(package)
-                        scheduleTypingCheck() // the new app may open with a text box focused
-                        applyAndroidRate() // includes lifting Android's 60 fps default for games
-                    }
+                    if let package = AndroidWatch.foregroundPackage(fromEvent: line) { foregroundDidChange(package) }
                 }
             } catch {
                 log.error("Foreground-app watch ended: \(error.localizedDescription)")
@@ -311,13 +335,23 @@ final class EmulatorModel {
         }
     }
 
+    /// The foreground app changed, or was read when the watcher attached: refresh everything keyed to it.
+    private func foregroundDidChange(_ package: String) {
+        gameKeys.appDidChange(package)
+        autoPots.appDidChange(package)
+        scheduleTypingCheck() // the new app may open with a text box focused
+        applyAndroidRate() // includes lifting Android's 60 fps default for games
+        applyGameSpeed()
+    }
+
     /// Mac-keyboard-only and Lightweight Android, as currently chosen (render scale rides along
     /// with each game's frame rate). Idempotent, so it runs on every boot and on every change.
     func applyAndroidOptions() {
         guard let serial = engine?.serial else { return }
         let options = AndroidOptions.shared
         var commands = [AndroidCommands.quietGraphicsLog, AndroidCommands.keepScreenOrientation, AndroidCommands.keyboardOnly(options.macKeyboardOnly),
-                        AndroidCommands.lightweight(options.lightweight), cutout.command]
+                        AndroidCommands.lightweight(options.effectiveLightweight), cutout.command,
+                        AndroidCommands.animations(!options.superLight)]
         if runningGuestAngle == true { commands.insert(AndroidCommands.angleWorkarounds, at: 0) } // before any game starts
         optionsTask?.cancel()
         optionsTask = Task {
@@ -328,6 +362,25 @@ final class EmulatorModel {
             }
         }
         applyAndroidRate()
+        applyGameSpeed()
+    }
+
+    /// Preloads the speed library into the current game and applies the chosen speed. Custom-model
+    /// only — the Play Store profile has no writable system to install the library into. Serialized
+    /// so quick changes land in order.
+    private func applyGameSpeed() {
+        guard profile == .customModel, let engine, let game = gameKeys.currentApp,
+              AndroidWatch.isValidPackage(game) else { return }
+        let speed = gameSpeed
+        let previous = speedTask
+        speedTask = Task {
+            await previous?.value
+            do {
+                try await Engine.setGameSpeed(speed, package: game, serial: engine.serial)
+            } catch {
+                log.error("Could not set game speed: \(error.localizedDescription)")
+            }
+        }
     }
 
     /// Typing is only watched while game keys are live: it costs Android a little CPU twice a second.
@@ -439,6 +492,14 @@ final class EmulatorModel {
             } catch {
                 status = "Couldn't set the device model: \(error.localizedDescription)"
                 log.error("Device model apply failed: \(error.localizedDescription)")
+            }
+            // Custom-model has a writable system, so install the speed library now (one remount at
+            // boot), making game speed work on every instance without a remount on the hot path.
+            // Idempotent: skips when it's already there.
+            do {
+                _ = try await Engine.installSpeedLibrary(serial: serial)
+            } catch {
+                log.error("Speed library install failed: \(error.localizedDescription)")
             }
         }
     }
@@ -614,6 +675,7 @@ final class EmulatorModel {
     var androidFPS: Int? {
         guard let displayMaxFPS else { return nil }
         if isInBackground, lowerFPSInBackground { return min(Self.backgroundFPS, displayMaxFPS) }
+        if AndroidOptions.shared.superLight { return min(AndroidOptions.superLightFPS, displayMaxFPS) }
         return fpsCap == 0 ? displayMaxFPS : min(fpsCap, displayMaxFPS)
     }
 
@@ -627,7 +689,7 @@ final class EmulatorModel {
             do {
                 try await Engine.setAndroidRefreshRate(rate, serial: engine.serial)
                 if let game {
-                    try await Engine.setGameMode(fps: rate, renderScale: AndroidOptions.shared.renderScale,
+                    try await Engine.setGameMode(fps: rate, renderScale: AndroidOptions.shared.effectiveRenderScale,
                                                  package: game, serial: engine.serial)
                 }
             } catch {

@@ -7,7 +7,25 @@ extension Engine {
     private static let rebootSettle: Duration = .seconds(6)
     private static let rootAttempts = 20
 
-    private static var avdRoot: URL { home.appending(path: ".android/avd") }
+    static var avdRoot: URL { home.appending(path: ".android/avd") }
+
+    /// Copies a stopped AVD, Android data included, under a new name. An APFS clone: instant, and
+    /// it shares disk space with the original until either changes. A source that was never
+    /// created (that profile unused) is skipped. Returns whether it copied. `root` is for tests.
+    static func cloneAvd(_ source: String, to target: String, root: URL = avdRoot) throws -> Bool {
+        let fm = FileManager.default
+        let sourceDir = root.appending(path: "\(source).avd"), targetDir = root.appending(path: "\(target).avd")
+        guard fm.fileExists(atPath: sourceDir.path) else { return false }
+        guard !fm.fileExists(atPath: targetDir.path) else { throw CocoaError(.fileWriteFileExists) }
+        try fm.copyItem(at: sourceDir, to: targetDir)
+        // Lock files belong to the original's runs.
+        for name in try fm.contentsOfDirectory(atPath: targetDir.path) where name.hasSuffix(".lock") {
+            try fm.removeItem(at: targetDir.appending(path: name))
+        }
+        let ini = "avd.ini.encoding=UTF-8\npath=\(targetDir.path)\npath.rel=avd/\(target).avd\ntarget=android-35\n"
+        try ini.write(to: root.appending(path: "\(target).ini"), atomically: true, encoding: .utf8)
+        return true
+    }
 
     /// Creates `avd` the first time, as a copy of `templateAvd` (same screen, CPU, memory) on the
     /// profile's system image. Its Android data starts fresh on first boot.
@@ -84,6 +102,47 @@ extension Engine {
     /// `package` must pass `AndroidWatch.isValidPackage` (it goes into a shell command).
     static func setGameMode(fps: Int, renderScale: Double, package: String, serial: String) async throws {
         _ = try await adb(serial: serial, ["shell", AndroidCommands.gameMode(fps: fps, renderScale: renderScale, package: package)])
+    }
+
+    /// The game-speed library bundled in the app (absent when run as `swift run`, not an app bundle).
+    static var speedLibraryFile: URL? { Bundle.main.url(forResource: "libmyemuspeed", withExtension: "so") }
+
+    /// Installs the game-speed library into the guest's system lib dir, where an app may load it under
+    /// enforcing SELinux (unlike /data/local/tmp). Custom-model profile only (writable system). Pushes
+    /// only when the file differs. Returns false when the library isn't bundled.
+    static func installSpeedLibrary(serial: String) async throws -> Bool {
+        guard let lib = speedLibraryFile else { return false }
+        let want = SHA256.hash(data: try Data(contentsOf: lib)).map { String(format: "%02x", $0) }.joined()
+        if try await adb(serial: serial, ["shell", "sha256sum \(AndroidCommands.speedLibrary) 2>/dev/null"]).contains(want) {
+            return true
+        }
+        try await remountSystem(serial: serial)
+        _ = try await adb(serial: serial, ["push", lib.path, AndroidCommands.speedLibrary])
+        _ = try await adb(serial: serial, ["shell",
+            "chmod 644 \(AndroidCommands.speedLibrary) && chcon u:object_r:system_lib_file:s0 \(AndroidCommands.speedLibrary)"
+            + "; rm -f \(AndroidCommands.legacySpeedLibrary)"]) // drop the pre-rename lib left by older builds
+        return true
+    }
+
+    /// Preloads the speed library into `package` for its next launch and sets the live speed. Points
+    /// `wrap.` at the library only when it's actually present (installed at boot) — a wrapper naming a
+    /// missing file stops the app from launching — so a game with no library runs at normal speed
+    /// instead of failing to open. `package` must pass `AndroidWatch.isValidPackage`.
+    static func setGameSpeed(_ speed: Double, package: String, serial: String) async throws {
+        // Install on demand: the boot-time install can be missed (e.g. a slow custom-model boot), and
+        // without the library the wrap below is skipped and speed silently stays normal. Cheap when the
+        // library is already there (just a hash check); a remount only happens when it must be pushed.
+        if speed != 1.0 { _ = try? await installSpeedLibrary(serial: serial) }
+        let present = try await adb(serial: serial,
+            ["shell", "ls \(AndroidCommands.speedLibrary) >/dev/null 2>&1 && echo yes"]).contains("yes")
+        let scaling = speed != 1.0 && present
+        _ = try await adb(serial: serial, ["shell", AndroidCommands.gameSpeed(scaling ? speed : 1.0, package: package)])
+    }
+
+    /// The package of the app currently in front, read once to prime the foreground watcher (whose
+    /// event stream only reports later switches). nil when nothing suitable is resumed (e.g. launcher).
+    static func foregroundApp(serial: String) async throws -> String? {
+        AndroidWatch.foregroundPackage(fromDump: try await adb(serial: serial, ["shell", AndroidWatch.foregroundProbe]))
     }
 
     /// The phone name shown in Android's Settings. `name` must be a validated `DeviceIdentity.marketName`.

@@ -2,6 +2,43 @@ import Foundation
 import Testing
 @testable import MyEmu
 
+@Test func cloneCopiesAnAvdWithItsDataButNotItsLocks() throws {
+    let fm = FileManager.default
+    let root = fm.temporaryDirectory.appending(path: "clone-test-\(UUID().uuidString)")
+    defer { try? fm.removeItem(at: root) }
+    let source = root.appending(path: "myemu.avd")
+    try fm.createDirectory(at: source.appending(path: "multiinstance.lock"), withIntermediateDirectories: true)
+    try "hw.cpu.ncore=4\n".write(to: source.appending(path: "config.ini"), atomically: true, encoding: .utf8)
+    try "game data".write(to: source.appending(path: "userdata-qemu.img.qcow2"), atomically: true, encoding: .utf8)
+
+    #expect(try Engine.cloneAvd("myemu", to: "myemu-3", root: root))
+    let copy = root.appending(path: "myemu-3.avd")
+    #expect(try String(contentsOf: copy.appending(path: "userdata-qemu.img.qcow2"), encoding: .utf8) == "game data")
+    #expect(try String(contentsOf: copy.appending(path: "config.ini"), encoding: .utf8) == "hw.cpu.ncore=4\n")
+    #expect(!fm.fileExists(atPath: copy.appending(path: "multiinstance.lock").path))
+    #expect(fm.fileExists(atPath: source.appending(path: "multiinstance.lock").path)) // original untouched
+    let ini = try String(contentsOf: root.appending(path: "myemu-3.ini"), encoding: .utf8)
+    #expect(ini.contains("path=\(copy.path)\n") && ini.contains("path.rel=avd/myemu-3.avd"))
+
+    #expect(try !Engine.cloneAvd("myemu-custom", to: "myemu-custom-3", root: root)) // profile never used
+    #expect(throws: CocoaError.self) { try Engine.cloneAvd("myemu", to: "myemu-3", root: root) } // never overwrites
+}
+
+@MainActor
+@Test func cloneCarriesTheInstanceSettingsAndCapsTheName() throws {
+    let defaults = try #require(UserDefaults(suiteName: "clone-test-\(UUID().uuidString)"))
+    var list = InstanceList()
+    let added = (list.add(), list.add(name: String(repeating: "x", count: 60)))
+    let source = try #require(added.0), copy = try #require(added.1)
+    #expect(copy.name.count == InstanceList.maxNameLength)
+    defaults.set("customModel", forKey: source.defaultsKey("deviceProfile"))
+    defaults.set("punchHole", forKey: source.defaultsKey("cutout"))
+    EmulatorModel.copySettings(from: source, to: copy, defaults: defaults)
+    #expect(defaults.string(forKey: copy.defaultsKey("deviceProfile")) == "customModel")
+    #expect(defaults.string(forKey: copy.defaultsKey("cutout")) == "punchHole")
+    #expect(defaults.object(forKey: copy.defaultsKey("phoneLine")) == nil) // nothing to copy stays unset
+}
+
 @Test func instanceOneKeepsTheOriginalAvdsPortAndSettings() {
     #expect(Instance.main.avd(for: .playStore) == "myemu")
     #expect(Instance.main.avd(for: .customModel) == "myemu-custom")

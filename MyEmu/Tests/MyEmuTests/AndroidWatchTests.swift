@@ -11,6 +11,15 @@ import Testing
     #expect(AndroidWatch.foregroundPackage(fromEvent: "[0,../../etc/x/.A,reason]") == nil) // never a path
 }
 
+@Test func parsesForegroundAppFromActivityDump() {
+    #expect(AndroidWatch.foregroundPackage(fromDump: "  topResumedActivity=ActivityRecord{3f9a u0 com.com.Xerion/org.cocos2dx.lib.Cocos2dxActivity t42}")
+            == "com.com.Xerion")
+    #expect(AndroidWatch.foregroundPackage(fromDump: "topResumedActivity=ActivityRecord{a u0 com.google.android.apps.nexuslauncher/.NexusLauncherActivity t1}")
+            == "com.google.android.apps.nexuslauncher")
+    #expect(AndroidWatch.foregroundPackage(fromDump: "") == nil)
+    #expect(AndroidWatch.foregroundPackage(fromDump: "topResumedActivity=ActivityRecord{a u0 ../../etc/x/.A t1}") == nil) // never a path
+}
+
 @Test func keyboardRequestsTriggerATextFieldCheck() {
     // Requests only say "something changed": games send hide requests Android refuses while the box stays open.
     #expect(AndroidWatch.isKeyboardRequest("I/ImeTracker( 1336): com.Tq.CQ2ClientAndroid:9c6bd392: onRequestShow at ORIGIN_CLIENT reason SHOW_SOFT_INPUT fromUser false"))
