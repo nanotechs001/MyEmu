@@ -1,6 +1,22 @@
 # MyEmu for Windows — handoff for the agent on the Windows PC
 
-Status (2026-11-07): **no Windows app code exists yet.** Only the phase-0 test script is here.
+Status (2026-11-08, branch `windows-autopots`):
+- **Phase 0 is done and failed the gate:** Xerion runs at 7–9 fps on Google's engine (every image/renderer/core
+  setup) vs 35 fps in MuMu 12. Details and open questions: `PLAN.md` → "Windows phase 0". Step 1 below
+  (full app on Google's engine) is on hold until that gap is closed or the user picks another route.
+- **Interim:** `AutoPots/` — a .NET 8 WPF app that runs AutoPots beside a MuMu instance through
+  MuMu's own SDK (`external_renderer_ipc.dll`) and MuMuManager. Test on MuMu instance 1.
+- **Step 1 started (branch `windows-app`, user's call: our own app, not a MuMu add-on):** `MyEmu/` — .NET 8 WPF.
+  `MyEmu.exe [avd]` starts Google's engine headless with gRPC (same flags as the Mac), shows Android's
+  screen in its window, mouse → touch, keyboard → Android (Windows scan codes), Back/Home/Recents, and
+  shuts Android down on close. Tested with the phase-0 AVD `myemu`: Xerion starts and runs in the window.
+  - Frames: gRPC `streamScreenshot` with the MMAP transport. On Windows the handle must be
+    `file://C:\...` (the engine strips `file://`), the file must not be DeleteOnClose, and the engine's
+    writes are only visible through a freshly opened handle (not a mapped view, not a kept handle), so
+    each frame is read back. ~1 ms per 1600×900 frame; RGBA→BGRA with SIMD into a WriteableBitmap.
+  - Known: WPF shows fewer frames than the engine sends (e.g. 46 → 24 fps); next step is drawing with
+    D3D11 or putting gfxstream's render window into ours (see "Display" below).
+  - Not yet: instances, settings drawers, keymaps, AutoPots, spoofing, game speed, MCP, installer.
 The Mac app in `MyEmu/` is Swift/AppKit/Metal and cannot be compiled for Windows — the Windows
 version is a new native app that reuses MyEmu's file formats, engine commands and test fixtures.
 
