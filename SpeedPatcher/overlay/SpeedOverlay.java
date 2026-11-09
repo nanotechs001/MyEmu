@@ -402,7 +402,7 @@ public final class SpeedOverlay implements Application.ActivityLifecycleCallback
         static volatile String phase = "", status = "Off";
         static volatile long tappedAt; // last injected tap, which the dropdown must not take as the player's
         private static long lastTap, lastLogin;
-        private static int notHunting;
+        private static int notHunting, missingHud;
 
         static void begin() {
             status = watchdog ? "Checking the game…" : "Off";
@@ -522,6 +522,7 @@ public final class SpeedOverlay implements Application.ActivityLifecycleCallback
                 "Auto-hunt button: %s (match %.2f, edge %d), yellow %d%% (hunting ≥ 50%%) · screen %dx%d%s",
                 hud ? "seen" : "not seen", found[0], shift, (int) (yellow * 100), w, h, tapError.isEmpty() ? "" : " · " + tapError);
             if (hud) {
+                missingHud = 0;
                 if (yellow >= 0.5f) { // measured: hunting 0.58-0.66 (MuMu and a Fold), not hunting 0.39-0.40
                     notHunting = 0;
                     // 10 s of hunting at 1× (after a login or turning auto-hunt on) before the chosen speed.
@@ -533,9 +534,16 @@ public final class SpeedOverlay implements Application.ActivityLifecycleCallback
                     } else {
                         status("Hunting: " + label() + " in " + (wait + 999) / 1000 + " s");
                     }
+                } else if (found[0] < 0.5f) {
+                    // Seen, but not clearly (damage numbers and effects fly over it): no verdict this time.
+                    status("Checking auto-hunt…");
+                } else if (++notHunting < 3) {
+                    // Fights make the button misread now and then: 3 clear readings in a row (~9 s) before acting,
+                    // since tapping it while it's on turns auto-hunt off.
+                    status("Not hunting?");
                 } else {
                     hold(true);
-                    if (++notHunting >= 2 && now - lastTap > 15000) {
+                    if (now - lastTap > 15000) {
                         tap(surface, swordsX, swordsY);
                         lastTap = now;
                         notHunting = 0;
@@ -546,11 +554,19 @@ public final class SpeedOverlay implements Application.ActivityLifecycleCallback
                 }
                 return;
             }
-            hold(true);
             notHunting = 0;
-            if (now - lastTap < 15000) return;
             float skipArea = 105 * s * k * 33 * s * k;
-            if (yesGold >= 0.4f && sidesDark >= 0.9f) { // measured: 0.62 / 1.0 on it; sand screens ~0.57 / 0.0
+            boolean disconnected = yesGold >= 0.4f && sidesDark >= 0.9f; // measured: 0.62 / 1.0 on it; sand ~0.57 / 0.0
+            boolean prompt = GAME.equals(phase) && light < 60 && skip >= skipArea * 0.018;
+            // In the world the button can vanish for a moment (a menu, a dialog, a flash of effects): keep the
+            // speed and auto-hunt as they are for up to 10 checks (~30 s). Real logouts show their own windows.
+            if (GAME.equals(phase) && !disconnected && !prompt && ++missingHud < 10) {
+                status("In game (auto-hunt button hidden for a moment)");
+                return;
+            }
+            hold(true);
+            if (now - lastTap < 15000) return;
+            if (disconnected) {
                 tap(surface, yesX, yesY);
                 lastTap = now;
                 status("Disconnected: pressing Yes");
