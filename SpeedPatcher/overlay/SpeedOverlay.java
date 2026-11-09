@@ -195,6 +195,23 @@ public final class SpeedOverlay implements Application.ActivityLifecycleCallback
 
     private static long panelClosedAt;
 
+    private static volatile boolean touching;
+
+    // The game opens windows of its own over the button later (its login screens are full-screen SDK
+    // windows), which would cover it: put the button back on top. Not mid-touch or with the dropdown open.
+    private static void raiseButton() {
+        Activity activity = resumed;
+        if (activity == null || hidden || panel != null || touching) return;
+        TextView button = buttons.get(activity);
+        if (button == null) return;
+        try {
+            List<View> roots = Watchdog.rootViews();
+            if (!roots.isEmpty() && roots.get(roots.size() - 1) != button) addButton(activity);
+        } catch (Throwable ignored) {
+            // can't see the window list: the button returns when the game next resumes
+        }
+    }
+
     // Tap the button: open the dropdown, or close it if open.
     private static void togglePanel(Activity activity, View button, WindowManager.LayoutParams at) {
         if (panel != null) closePanel(activity);
@@ -349,6 +366,7 @@ public final class SpeedOverlay implements Application.ActivityLifecycleCallback
                 downX = e.getRawX(); downY = e.getRawY();
                 startX = params.x; startY = params.y;
                 dragging = false;
+                touching = true;
                 return true;
             case MotionEvent.ACTION_MOVE:
                 float dx = e.getRawX() - downX, dy = e.getRawY() - downY;
@@ -365,10 +383,12 @@ public final class SpeedOverlay implements Application.ActivityLifecycleCallback
                 }
                 return true;
             case MotionEvent.ACTION_UP:
+                touching = false;
                 if (dragging) prefs.edit().putFloat("x", params.x).putFloat("y", params.y).apply();
                 else togglePanel(activity, v, params);
                 return true;
             case MotionEvent.ACTION_CANCEL:
+                touching = false;
                 return true;
             default:
                 return false;
@@ -391,6 +411,7 @@ public final class SpeedOverlay implements Application.ActivityLifecycleCallback
                 while (true) {
                     SystemClock.sleep(3000);
                     try {
+                        main.post(SpeedOverlay::raiseButton);
                         if (watchdog && !hidden) tick();
                     } catch (Throwable t) {
                         Log.w(TAG, "watchdog", t);
@@ -447,6 +468,13 @@ public final class SpeedOverlay implements Application.ActivityLifecycleCallback
                 status("Logging in");
                 return;
             }
+            if (now - lastTap > 15000 && clickAccountLogin(activity)) {
+                lastTap = now;
+                phase = LOGIN; // the game logs nothing when it drops back to this screen
+                hold(true);
+                status("Opening the login");
+                return;
+            }
             View decor = activity.getWindow().getDecorView();
             SurfaceView game = findSurface(decor);
             View surface = game;
@@ -465,21 +493,33 @@ public final class SpeedOverlay implements Application.ActivityLifecycleCallback
                 return;
             }
             float k = shot.getWidth() / (float) w;
-            float swordsX = w - 100 * s, swordsY = 194 * s;
-            int[] look = swordsColors(shot, swordsX * k, swordsY * k, 24 * s * k);
+            // The auto-hunt button (crossed swords) sits 100 design px from the right edge, 194 down, plus the
+            // game's safe-area margin (a camera cut-out: ~67 design px on a Galaxy Z Fold, 0 on MuMu). Found by
+            // its outline, so other icons and sand don't count (measured: the button matches 0.46-1.0, other
+            // screens at most 0.29); then gold (hunting) or pale by how yellow its strokes are.
+            int pw = shot.getWidth(), ph = shot.getHeight();
+            int[] px = new int[pw * ph];
+            shot.getPixels(px, 0, pw, 0, 0, pw, ph);
+            float[] found = findSwords(px, pw, ph, w, s, k); // {match, shift, dy, x, y, size}
+            boolean hud = found[0] >= 0.4f;
+            int shift = hud ? (int) found[1] : 0;
+            float right = w - shift * s; // the game's right edge, inside its safe area
+            float swordsX = right - 100 * s, swordsY = (194 + (hud ? found[2] : 0)) * s;
+            float yellow = hud ? yellowShare(px, pw, (int) found[3], (int) found[4], (int) found[5]) : 0;
             // A tutorial prompt dims the screen (hiding the HUD) and shows a bright "Skip" over the minimap.
-            int skip = bright(shot, (w - 155 * s) * k, 75 * s * k, (w - 50 * s) * k, 108 * s * k);
+            int skip = bright(shot, (right - 155 * s) * k, 75 * s * k, (right - 50 * s) * k, 108 * s * k);
             // "Account Disconnected. Please try again." [Yes]: a box on a black screen, gold button below the middle.
             float yesX = w / 2f, yesY = h / 2f + 140 * s;
             float yesGold = goldShare(shot, (yesX - 70 * s) * k, (yesY - 18 * s) * k, (yesX + 70 * s) * k, (yesY + 18 * s) * k);
             float sidesDark = darkSides(shot);
+            int light = meanBrightness(shot);
+            saveForDebugging(activity, shot, now);
             shot.recycle();
-            int gold = look[0], pale = look[1], area = look[2];
-            detail = String.format(java.util.Locale.ROOT, "Auto-hunt button: %s, gold %d%% (hunting ≥ 20%%) · screen %dx%d%s",
-                gold + pale > area * 0.03 ? "seen" : "not seen", gold + pale == 0 ? 0 : gold * 100 / (gold + pale), w, h,
-                tapError.isEmpty() ? "" : " · " + tapError);
-            if (gold + pale > area * 0.03) { // the in-game HUD's auto-hunt button
-                if (gold > (gold + pale) * 0.2) { // measured: hunting ~37% gold, not hunting ~11%
+            detail = String.format(java.util.Locale.ROOT,
+                "Auto-hunt button: %s (match %.2f, edge %d), yellow %d%% (hunting ≥ 50%%) · screen %dx%d%s",
+                hud ? "seen" : "not seen", found[0], shift, (int) (yellow * 100), w, h, tapError.isEmpty() ? "" : " · " + tapError);
+            if (hud) {
+                if (yellow >= 0.5f) { // measured: hunting 0.58-0.66 (MuMu and a Fold), not hunting 0.39-0.40
                     notHunting = 0;
                     hold(false);
                     status("Hunting");
@@ -504,8 +544,10 @@ public final class SpeedOverlay implements Application.ActivityLifecycleCallback
                 tap(surface, yesX, yesY);
                 lastTap = now;
                 status("Disconnected: pressing Yes");
-            } else if (GAME.equals(phase) && skip >= skipArea * 0.018) { // measured: ~25 of 900 with the prompt, 0-9 without
-                tap(surface, w - 130 * s, 91 * s);
+            } else if (GAME.equals(phase) && light < 60 && skip >= skipArea * 0.018) {
+                // measured: ~25 of 900 bright with the prompt, 0-9 without; the prompt dims the screen to ~39
+                // brightness, while the login screen (bright sky there too, and the support button) is ~140.
+                tap(surface, right - 130 * s, 91 * s);
                 lastTap = now;
                 status("Skipping a tutorial prompt");
             } else if (SERVER.equals(phase)) {
@@ -584,27 +626,37 @@ public final class SpeedOverlay implements Application.ActivityLifecycleCallback
             return all > 0 && dark > all * 0.98;
         }
 
-        // The account box (the game SDK's own Android dialog): press its Log In with the saved account.
-        // Its button is the SDK's generic confirm button, so only in the window with the login box's
-        // version label (measured with uiautomator: nd_tv_confirm_btn_confirm "Log In", nd_login_tv_version).
+        // The game's login screens are the SDK's own Android windows over the game (measured with
+        // uiautomator), so their buttons are pressed by id, at any screen size:
+        //  - the account box: Log In (the SDK's generic confirm button, so only in the window that has the
+        //    box's version label), with the saved account;
+        //  - the screen behind it: Xerion Login (opens the box).
         private static boolean clickLogIn(Activity activity) {
+            return clickById(activity, "nd_tv_confirm_btn_confirm", "nd_login_tv_version");
+        }
+
+        private static boolean clickAccountLogin(Activity activity) {
+            return clickById(activity, "nd_other_account_login", null);
+        }
+
+        private static boolean clickById(Activity activity, String button, String alongside) {
             android.content.res.Resources res = activity.getResources();
-            int confirm = res.getIdentifier("nd_tv_confirm_btn_confirm", "id", activity.getPackageName());
-            int loginLabel = res.getIdentifier("nd_login_tv_version", "id", activity.getPackageName());
-            if (confirm == 0 || loginLabel == 0) return false;
+            int id = res.getIdentifier(button, "id", activity.getPackageName());
+            int with = alongside == null ? 0 : res.getIdentifier(alongside, "id", activity.getPackageName());
+            if (id == 0 || (alongside != null && with == 0)) return false;
             boolean[] clicked = {false};
             CountDownLatch done = new CountDownLatch(1);
             main.post(() -> {
                 try {
                     for (View root : rootViews()) {
-                        View button = root.findViewById(confirm);
-                        if (button != null && button.isShown() && root.findViewById(loginLabel) != null) {
-                            clicked[0] = button.performClick();
+                        View view = root.findViewById(id);
+                        if (view != null && view.isShown() && (with == 0 || root.findViewById(with) != null)) {
+                            clicked[0] = view.performClick();
                             break;
                         }
                     }
                 } catch (Throwable t) {
-                    Log.w(TAG, "login box", t);
+                    Log.w(TAG, "login screen", t);
                 } finally {
                     done.countDown();
                 }
@@ -659,19 +711,73 @@ public final class SpeedOverlay implements Application.ActivityLifecycleCallback
 
         private static boolean surfaceFailureLogged;
 
-        /** {gold, pale, area} pixels in a square around the auto-hunt button. */
-        static int[] swordsColors(Bitmap shot, float cx, float cy, float r) {
-            int gold = 0, pale = 0, area = 0;
-            for (int y = (int) (cy - r); y < cy + r; y++) {
-                for (int x = (int) (cx - r); x < cx + r; x++) {
-                    if (x < 0 || y < 0 || x >= shot.getWidth() || y >= shot.getHeight()) continue;
-                    int c = shot.getPixel(x, y), red = Color.red(c), green = Color.green(c), blue = Color.blue(c);
-                    area++;
-                    if (red > 200 && green > 160 && blue < 120) gold++;
-                    else if (red > 200 && green > 190 && blue > 150) pale++;
+        // The auto-hunt button's crossed swords: bright strokes in a 28x28 box at the capture scale of a
+        // 2560x1440 game (design scale 0.5), from MuMu.
+        private static final String[] SWORDS = {
+            "0000000000000000000000000000", "0000000000000000000000000000", "0000000000000000000000000000",
+            "0000000000000000000000000000", "0000000000000000000000000000", "0000000000000000000000000000",
+            "0000000000000000000000000000", "0000000000000000000000000000", "0000000011000000000110000000",
+            "0000000001110000001100000000", "0000000000111000011100000000", "0000000000011001111000000000",
+            "0000000000000011110000000000", "0000000000000111100000000000", "0000000000001111000000000000",
+            "0000000000010010010000000000", "0000000000100100001000000000", "0000000000111000111000000000",
+            "0000000001110000011110000000", "0000000011000000000110000000", "0000000010000000000000000000",
+            "0000000000000000000000000000", "0000000000000000000000000000", "0000000000000000000000000000",
+            "0000000000000000000000000000", "0000000000000000000000000000", "0000000000000000000000000000",
+            "0000000000000000000000000000",
+        };
+
+        /**
+         * Where the swords outline best matches the picture's bright strokes (normalized correlation),
+         * searching 0-300 design px left of the usual spot and 24 up or down:
+         * {match -1..1, shift, dy (design px), x, y, size (picture px)}.
+         */
+        static float[] findSwords(int[] px, int pw, int ph, int w, float s, float k) {
+            int n = Math.max(8, Math.round(28 * s * k / 0.5f));
+            float[] t = new float[n * n];
+            float mean = 0;
+            for (int i = 0; i < n; i++)
+                for (int j = 0; j < n; j++) mean += t[i * n + j] = SWORDS[i * 28 / n].charAt(j * 28 / n) == '1' ? 1 : 0;
+            mean /= n * n;
+            float tn = 0;
+            for (int i = 0; i < t.length; i++) { t[i] -= mean; tn += t[i] * t[i]; }
+            tn = (float) Math.sqrt(tn);
+            byte[] stroke = new byte[px.length];
+            for (int i = 0; i < px.length; i++)
+                if (Color.red(px[i]) > 170 && Color.green(px[i]) > 140) stroke[i] = 1;
+            float[] best = {-1, 0, 0, 0, 0, n};
+            for (int extra = 0; extra <= 300; extra += 2) {
+                for (int dy = -24; dy <= 24; dy += 3) {
+                    int x = Math.round((w - (100 + extra) * s) * k - n / 2f), y = Math.round((194 + dy) * s * k - n / 2f);
+                    if (x < 0 || y < 0 || x + n > pw || y + n > ph) continue;
+                    float dot = 0;
+                    int on = 0;
+                    for (int i = 0; i < n; i++) {
+                        int row = (y + i) * pw + x;
+                        for (int j = 0; j < n; j++)
+                            if (stroke[row + j] != 0) { dot += t[i * n + j]; on++; }
+                    }
+                    float spread = on - on * (float) on / (n * n); // the window's variance × its size (binary)
+                    if (spread <= 0) continue;
+                    float match = dot / ((float) Math.sqrt(spread) * tn);
+                    if (match > best[0]) best = new float[] {match, extra, dy, x, y, n};
                 }
             }
-            return new int[] {gold, pale, area};
+            return best;
+        }
+
+        /** Of the bright stroke pixels in the found box, the share that is yellow (red - blue ≥ 60). */
+        static float yellowShare(int[] px, int pw, int x, int y, int n) {
+            int yellow = 0, bright = 0;
+            for (int i = 0; i < n; i++) {
+                for (int j = 0; j < n; j++) {
+                    int c = px[(y + i) * pw + x + j], r = Color.red(c), g = Color.green(c), b = Color.blue(c);
+                    if (r > 190 && g > 170) {
+                        bright++;
+                        if (r - b >= 60) yellow++;
+                    }
+                }
+            }
+            return bright == 0 ? 0 : yellow / (float) bright;
         }
 
         /** Share of a box that is the game's gold button colour. */
@@ -701,6 +807,37 @@ public final class SpeedOverlay implements Application.ActivityLifecycleCallback
             return all == 0 ? 0 : dark / (float) all;
         }
 
+        private static long lastSaved;
+
+        // What the watchdog last saw, for when it misreads a device's screen (another GPU, scaling):
+        // <app external files>/watchdog.png, e.g. adb pull /sdcard/Android/data/com.com.Xerion/files/watchdog.png
+        // Every 30 s at most, overwritten; a 640-wide picture.
+        private static void saveForDebugging(Activity activity, Bitmap shot, long now) {
+            if (now - lastSaved < 30000) return;
+            lastSaved = now;
+            java.io.File folder = activity.getExternalFilesDir(null);
+            if (folder == null) return;
+            try (java.io.FileOutputStream out = new java.io.FileOutputStream(new java.io.File(folder, "watchdog.png"))) {
+                shot.compress(Bitmap.CompressFormat.PNG, 100, out);
+            } catch (java.io.IOException | RuntimeException e) {
+                Log.w(TAG, "can't save watchdog.png", e);
+            }
+        }
+
+        /** Average brightness (0-255) of the picture. */
+        static int meanBrightness(Bitmap shot) {
+            long sum = 0;
+            int n = 0;
+            for (int y = 0; y < shot.getHeight(); y += 8) {
+                for (int x = 0; x < shot.getWidth(); x += 8) {
+                    int c = shot.getPixel(x, y);
+                    sum += (Color.red(c) + Color.green(c) + Color.blue(c)) / 3;
+                    n++;
+                }
+            }
+            return n == 0 ? 0 : (int) (sum / n);
+        }
+
         /** Near-white pixels in a box. */
         static int bright(Bitmap shot, float x0, float y0, float x1, float y1) {
             int n = 0;
@@ -714,42 +851,58 @@ public final class SpeedOverlay implements Application.ActivityLifecycleCallback
         }
 
         // A tap the game sees as a finger (injecting into the app's own windows needs no permission).
+        // A finger tap on the game. First straight into the game's own window, as Android delivers a finger
+        // (no permission needed); only if the game doesn't take it, an injected touch, which phones can refuse
+        // (seen on a Galaxy Z Fold: SecurityException, likely Samsung's game overlay above the game).
         private static void tap(View surface, float x, float y) {
+            Activity activity = resumed;
             int[] at = new int[2];
-            surface.getLocationOnScreen(at);
-            float sx = at[0] + x, sy = at[1] + y;
+            surface.getLocationInWindow(at);
+            float wx = at[0] + x, wy = at[1] + y;
             long down = SystemClock.uptimeMillis();
             tappedAt = down;
-            MotionEvent press = MotionEvent.obtain(down, down, MotionEvent.ACTION_DOWN, sx, sy, 0);
+            MotionEvent press = MotionEvent.obtain(down, down, MotionEvent.ACTION_DOWN, wx, wy, 0);
             press.setSource(InputDevice.SOURCE_TOUCHSCREEN);
-            MotionEvent release = MotionEvent.obtain(down, down + 80, MotionEvent.ACTION_UP, sx, sy, 0);
+            MotionEvent release = MotionEvent.obtain(down, down + 80, MotionEvent.ACTION_UP, wx, wy, 0);
             release.setSource(InputDevice.SOURCE_TOUCHSCREEN);
             try {
+                boolean[] taken = {false};
+                if (activity != null) {
+                    onMain(() -> taken[0] = activity.dispatchTouchEvent(press));
+                    SystemClock.sleep(80);
+                    onMain(() -> activity.dispatchTouchEvent(release));
+                }
+                if (taken[0]) {
+                    tapError = "";
+                    return;
+                }
+                surface.getLocationOnScreen(at);
+                press.setLocation(at[0] + x, at[1] + y);
+                release.setLocation(at[0] + x, at[1] + y);
                 Instrumentation input = new Instrumentation();
                 input.sendPointerSync(press);
                 SystemClock.sleep(80);
                 input.sendPointerSync(release);
                 tapError = "";
             } catch (RuntimeException e) {
-                // Android refused the injected touch: hand it to the game's view directly instead.
-                Log.w(TAG, "tap at " + sx + "," + sy, e);
-                tapError = "tap refused (" + e.getClass().getSimpleName() + "), sent to the view";
-                press.setLocation(x, y);
-                release.setLocation(x, y);
-                CountDownLatch done = new CountDownLatch(1);
-                main.post(() -> {
-                    try {
-                        surface.dispatchTouchEvent(press);
-                        surface.dispatchTouchEvent(release);
-                    } finally {
-                        done.countDown();
-                    }
-                });
-                await(done);
+                Log.w(TAG, "tap at " + x + "," + y, e);
+                tapError = "tap refused (" + e.getClass().getSimpleName() + ")";
             } finally {
                 press.recycle();
                 release.recycle();
             }
+        }
+
+        private static void onMain(Runnable work) {
+            CountDownLatch done = new CountDownLatch(1);
+            main.post(() -> {
+                try {
+                    work.run();
+                } finally {
+                    done.countDown();
+                }
+            });
+            await(done);
         }
 
         static volatile String tapError = "";
