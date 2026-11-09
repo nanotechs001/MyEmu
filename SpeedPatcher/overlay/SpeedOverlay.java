@@ -3,6 +3,7 @@ package com.myemu.speed;
 import android.app.Activity;
 import android.app.Application;
 import android.app.Instrumentation;
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.graphics.Bitmap;
 import android.graphics.Color;
@@ -482,19 +483,33 @@ public final class SpeedOverlay implements Application.ActivityLifecycleCallback
             SurfaceView game = findSurface(decor);
             View surface = game;
             Bitmap shot = game == null ? null : capture(game);
+            boolean black = false; // a picture came back, all black (not: couldn't copy it)
             if (shot == null || allBlack(shot)) { // some GPUs (MyEmu on a Mac) can't copy the game's surface: the window, then
-                if (shot != null) shot.recycle();
+                if (shot != null) { black = true; shot.recycle(); }
                 surface = decor;
                 shot = captureWindow(activity, decor);
-                if (shot != null && allBlack(shot)) { shot.recycle(); shot = null; }
+                if (shot != null && allBlack(shot)) { black = true; shot.recycle(); shot = null; }
             }
             int w = surface.getWidth(), h = surface.getHeight();
             if (w <= 0 || h <= 0) return;
             float s = Math.min(w / 1280f, h / 720f);
             if (shot == null) {
                 blind(surface, w, h, s, now);
+                // The game sometimes loses its picture for good (black, seen on MuMu after switching apps):
+                // after 20 s of that, start it over. Loading screens are black for a few seconds.
+                if (!black) {
+                    blackSince = 0;
+                } else if (blackSince == 0) {
+                    blackSince = now;
+                } else if (now - blackSince >= 20000) {
+                    blackSince = 0;
+                    relaunch(activity);
+                } else {
+                    status("Black screen " + (now - blackSince) / 1000 + " s (relaunching the game at 20 s)");
+                }
                 return;
             }
+            blackSince = 0;
             float k = shot.getWidth() / (float) w;
             // The auto-hunt button (crossed swords) sits 100 design px from the right edge, 194 down, plus the
             // game's safe-area margin (a camera cut-out: ~67 design px on a Galaxy Z Fold, 0 on MuMu). Found by
@@ -540,6 +555,7 @@ public final class SpeedOverlay implements Application.ActivityLifecycleCallback
                 } else if (++notHunting < 3) {
                     // Fights make the button misread now and then: 3 clear readings in a row (~9 s) before acting,
                     // since tapping it while it's on turns auto-hunt off.
+                    Log.i(TAG, String.format(java.util.Locale.ROOT, "watchdog: not hunting? match %.2f yellow %.2f", found[0], yellow));
                     status("Not hunting?");
                 } else {
                     hold(true);
@@ -587,6 +603,22 @@ public final class SpeedOverlay implements Application.ActivityLifecycleCallback
             } else {
                 status(GAME.equals(phase) ? "In game, waiting for the HUD" : ENTERING.equals(phase) ? "Loading" : "Waiting");
             }
+        }
+
+        private static long blackSince;
+
+        // Start the game over: a fresh task for its launcher activity, then end this (frozen) process.
+        // Allowed because the game is in front; Android starts the new activity in a new process.
+        private static void relaunch(Activity activity) {
+            Intent launch = activity.getPackageManager().getLaunchIntentForPackage(activity.getPackageName());
+            if (launch == null || launch.getComponent() == null) return;
+            status("Black screen for 20 s: relaunching the game");
+            Log.i(TAG, "watchdog: relaunching the game after 20 s of black screen");
+            Intent restart = Intent.makeRestartActivityTask(launch.getComponent());
+            main.post(() -> {
+                activity.startActivity(restart);
+                main.postDelayed(() -> Runtime.getRuntime().exit(0), 500);
+            });
         }
 
         // Can't see the game's picture: go by its log alone. In the world: the chosen speed (auto-hunt
