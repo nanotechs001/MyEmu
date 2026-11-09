@@ -52,7 +52,16 @@ Status (2026-11-08, branch `windows-autopots`):
     `set_game_speed`; one instance, id `main` / "Android 1". `stop_instance` stops Android, the window
     stays. Screenshots come from MyEmu's own frames. Add it to Claude Code with
     `claude mcp add --transport http myemu http://127.0.0.1:8765/mcp`.
-  - Not yet: instances, device settings, spoofing, game speed (needs the Custom-model profile), installer.
+  - Instances (port of `Instances`/`InstanceManager`/`InstancesDrawer`): one process, one window per
+    instance; `%LOCALAPPDATA%\MyEmu\instances.json` in the Mac's JSON; instance 1 = AVD `myemu`, port 8554,
+    instance n = `myemu-<n>`, port 8554 + 2(n−1). New = fresh Android from instance 1's config (landscape,
+    suggested CPU/memory); Clone = a plain copy of a stopped AVD (NTFS has no clones; the dead RAM
+    snapshot, locks and run files are skipped); Delete clears read-only files (`pstore.bin`) first.
+    Options are app-wide (a change applies to every window); MCP addresses every instance. Checked: a
+    second instance ran beside instance 1 (emulator-5556), was stopped, cloned (2.2 GB, ~5 s), the copy
+    started over MCP, both deleted. ponytail: F8 (AutoPots) registers for the first window only.
+  - Not yet: device settings/spoofing and game speed (both need the Custom-model profile: Google's
+    `google_apis` x86_64 Android 15 image, ~1.5 GB, not downloaded here), installer.
 The Mac app in `MyEmu/` is Swift/AppKit/Metal and cannot be compiled for Windows — the Windows
 version is a new native app that reuses MyEmu's file formats, engine commands and test fixtures.
 
