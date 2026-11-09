@@ -13,7 +13,11 @@ public partial class MainWindow : Window
     const int KeyBack = 158, KeyHome = 172, KeyRecents = 580; // Linux evdev codes
 
     readonly string avd;
-    readonly CancellationTokenSource running = new();
+    CancellationTokenSource running = new(); // one per engine run: replaced on restart
+    Task engineTask = Task.CompletedTask;
+    bool restarting;
+    AvdSettings? avdSettings, draft; // the AVD's config.ini and the panel's unapplied edits
+    static readonly HostLimits Host = HostLimits.Current;
     EngineInstance? engine;
     EmulatorClient? client;
     FrameBuffer? frames;
@@ -60,7 +64,9 @@ public partial class MainWindow : Window
         ShowAutoPots();
         ShowOptions();
         StateChanged += (_, _) => ApplyRate(); // minimized → background frame rate
-        Loaded += async (_, _) => await StartAsync();
+        Loaded += (_, _) => engineTask = StartAsync();
+        AiControlBox.IsChecked = options.AiControl;
+        if (options.AiControl) Loaded += async (_, _) => await SetAiControlAsync(true);
         Closing += OnClosing;
         PreviewKeyDown += (_, e) => OnKey(e, down: true);
         PreviewKeyUp += (_, e) => OnKey(e, down: false);
@@ -70,19 +76,23 @@ public partial class MainWindow : Window
 
     async Task StartAsync()
     {
+        var cancel = running.Token;
         try
         {
             displayMaxFps = RefreshRate();
             Status.Text = $"Starting {avd}...";
             runningGuestAngle = options.GuestAngle;
-            engine = await Engine.StartAsync(avd, GrpcPort, displayMaxFps, runningGuestAngle, running.Token);
+            engine = await Engine.StartAsync(avd, GrpcPort, displayMaxFps, runningGuestAngle, cancel);
+            avdSettings = draft = AvdSettings.Read(avd);
             client = new EmulatorClient(engine.Port, engine.Token);
             frames = new FrameBuffer(engine.Size.Width * engine.Size.Height * 4);
             Status.Text = $"{avd} booting ({engine.Serial})";
             gameKeys.Device = engine.Size;
             ShowOptions(); // the frame-rate list depends on the screen's rate
+            ShowDisplay();
             ApplyOptions();
-            _ = WatchForegroundAppAsync(engine.Serial);
+            WatchTyping(gameKeys.IsLive); // after a restart: the old watch ended with the old engine
+            _ = WatchForegroundAppAsync(engine.Serial, cancel);
             pots.Attach(value => Dispatcher.BeginInvoke(() => pots.SetReading(value)));
             var size = engine.Size;
             await client.StreamFramesAsync(frames, size, (w, h) => // frame thread
@@ -99,14 +109,103 @@ public partial class MainWindow : Window
                     });
                 }
                 Interlocked.Increment(ref frameCount);
-            }, running.Token);
-            if (!stopping) Status.Text = "The engine stopped sending frames.";
+            }, cancel);
+            if (!stopping && !restarting) Status.Text = "The engine stopped sending frames.";
         }
-        catch (Exception e) when (!stopping)
+        catch (Exception e) when (!stopping && !restarting)
         {
             Status.Text = e is OperationCanceledException ? "Stopped." : $"Error: {e.Message}";
         }
-        catch { } // closing
+        catch { } // closing or restarting
+    }
+
+    /// Shuts Android down, writes the panel's AVD changes, and starts it again (Mac: EmulatorModel.restart).
+    async Task RestartAndroidAsync()
+    {
+        if (restarting || engine == null) return;
+        restarting = true;
+        ShowDisplay();
+        Status.Text = "Restarting Android…";
+        await StopAndroidAsync();
+        if (draft is { } d && d != avdSettings)
+        {
+            try { d.Write(avd); }
+            catch (Exception e)
+            {
+                Status.Text = $"Couldn't save the new settings: {e.Message}";
+                await Task.Delay(3000); // let it be read, then boot as before
+            }
+        }
+        restarting = false;
+        ShowDisplay();
+        StartAndroid();
+    }
+
+    /// Shuts the engine down and waits until its frame stream has ended; the window stays.
+    async Task StopAndroidAsync()
+    {
+        if (engine is not { } old) return;
+        gameKeys.ReleaseAll();
+        running.Cancel();
+        await Engine.StopAsync(old); // the same AVD can't run twice
+        await engineTask;
+        frameWidth = frameHeight = 0; // AutoPots reads no frames now
+        client?.Dispose();
+        frames?.Dispose();
+        (client, frames, engine) = (null, null, null);
+    }
+
+    void StartAndroid()
+    {
+        if (stopping) return; // the window is closing
+        running = new CancellationTokenSource();
+        engineTask = StartAsync();
+    }
+
+    // --- AI control (Mac: AIControl + MyEmuMCP; one instance here)
+
+    McpHttpServer? mcp;
+
+    async Task SetAiControlAsync(bool on)
+    {
+        if (mcp != null) { await mcp.DisposeAsync(); mcp = null; }
+        AiControlUrl.Text = on ? McpHttpServer.Url : "";
+        AiControlNote.Foreground = System.Windows.Media.Brushes.Gray;
+        if (!on) return;
+        var tools = new MyEmuMcp(
+            state: () => Dispatcher.InvokeAsync(() => new McpWindowState(engine != null && !restarting, engine?.Serial, Status.Text, currentApp)).Task,
+            start: () => Dispatcher.InvokeAsync(() =>
+            {
+                if (engine != null || restarting || !engineTask.IsCompleted) return "Android 1 is already running or starting. Poll list_instances until ready is true.";
+                StartAndroid();
+                return "Starting Android 1. Poll list_instances until ready is true.";
+            }).Task,
+            stop: () => Dispatcher.InvokeAsync(async () =>
+            {
+                if (engine == null || restarting) return "Android 1 isn't running.";
+                restarting = true; // no restart or second stop meanwhile
+                Status.Text = "Stopping Android…";
+                await StopAndroidAsync();
+                restarting = false;
+                Status.Text = "Android stopped. start_instance (MCP) starts it again.";
+                ShowDisplay();
+                return "Stopped Android 1.";
+            }).Task.Unwrap(),
+            screen: () => frames is { } f && frameWidth > 0 ? ((byte[])f.Pixels.Clone(), frameWidth, frameHeight) : null);
+        try { mcp = await McpHttpServer.StartAsync(tools.Dispatcher); }
+        catch (Exception e)
+        {
+            AiControlUrl.Text = "";
+            AiControlNote.Text = $"Couldn't start on port {McpHttpServer.Port}: {e.Message}";
+            AiControlNote.Foreground = System.Windows.Media.Brushes.IndianRed;
+        }
+    }
+
+    async void AiControl_Click(object sender, RoutedEventArgs e)
+    {
+        options.AiControl = AiControlBox.IsChecked == true;
+        options.Save();
+        await SetAiControlAsync(options.AiControl);
     }
 
     // --- Android options (Mac: EmulatorModel.applyAndroidOptions / applyAndroidRate / watchForegroundApp)
@@ -141,20 +240,22 @@ public partial class MainWindow : Window
     }
 
     /// Re-applies the game frame rate whenever another app comes to the front.
-    async Task WatchForegroundAppAsync(string serial)
+    async Task WatchForegroundAppAsync(string serial, CancellationToken cancel)
     {
-        while (!running.IsCancellationRequested)
+        while (!cancel.IsCancellationRequested)
         {
             try
             {
                 // The event stream reports only later switches; read the app already in front once.
-                AppInFront(AndroidWatch.ForegroundPackageFromDump(await Engine.AdbAsync(serial, ["wait-for-device", "shell", AndroidWatch.ForegroundProbe])));
-                await foreach (var line in AndroidWatch.Lines(serial, AndroidWatch.ForegroundCommand, running.Token))
+                var dump = await Engine.AdbAsync(serial, ["wait-for-device", "shell", AndroidWatch.ForegroundProbe]);
+                if (cancel.IsCancellationRequested) return;
+                AppInFront(AndroidWatch.ForegroundPackageFromDump(dump));
+                await foreach (var line in AndroidWatch.Lines(serial, AndroidWatch.ForegroundCommand, cancel))
                     AppInFront(AndroidWatch.ForegroundPackageFromEvent(line));
             }
-            catch (Exception e) when (!running.IsCancellationRequested) { Debug.WriteLine($"Foreground watch ended: {e.Message}"); }
+            catch (Exception e) when (!cancel.IsCancellationRequested) { Debug.WriteLine($"Foreground watch ended: {e.Message}"); }
             catch { return; }
-            try { await Task.Delay(2000, running.Token); } catch (OperationCanceledException) { return; }
+            try { await Task.Delay(2000, cancel); } catch (OperationCanceledException) { return; }
         }
     }
 
@@ -424,6 +525,7 @@ public partial class MainWindow : Window
         options.GuestAngle = RendererBox.SelectedIndex == 0;
         options.Save();
         UpdateOptionNotes();
+        ShowDisplay(); // a renderer change shows Apply & Restart
         ApplyOptions();
     }
 
@@ -431,8 +533,120 @@ public partial class MainWindow : Window
     {
         FpsBox.IsEnabled = RenderScaleBox.IsEnabled = !options.SuperLight;
         RendererNote.Text = engine != null && runningGuestAngle != options.GuestAngle
-            ? "Takes effect the next time MyEmu starts Android."
+            ? "Applies when Android restarts (Apply & Restart below)."
             : "Vulkan ran Xerion at the same fps as OpenGL with about half the GPU. Use OpenGL only if a game draws incorrectly.";
+    }
+
+    // --- Display and CPU & memory (Mac: DisplayDrawer, PerformanceDrawer's CPU & memory, ApplyChangesFooter)
+
+    bool? listedLandscape; // the orientation ResolutionBox lists
+
+    void ShowDisplay()
+    {
+        var wasLoading = loadingOptions;
+        loadingOptions = true;
+        var editable = avdSettings != null && !restarting;
+        foreach (var c in new Control[] { OrientationBox, ResolutionBox, WidthBox, HeightBox, DensityBox, PerformanceBox, CoresBox, MemoryBox, SuggestedButton })
+            c.IsEnabled = editable;
+        DisplayCurrent.Text = "Available once Android has started.";
+        if (avdSettings is { } s && draft is { } d)
+        {
+            DisplayCurrent.Text = $"Now: {s.Width} × {s.Height} · {s.Density} DPI · {s.CpuCores} cores · {s.RamMB / 1024} GB";
+            OrientationBox.SelectedIndex = d.IsLandscape ? 0 : 1;
+            if (listedLandscape != d.IsLandscape)
+            {
+                listedLandscape = d.IsLandscape;
+                ResolutionBox.Items.Clear();
+                foreach (var p in ResolutionPreset.List(d.IsLandscape))
+                    ResolutionBox.Items.Add(new ComboBoxItem { Content = $"{p.Name} · {p.Density} DPI", Tag = p });
+                ResolutionBox.Items.Add(new ComboBoxItem { Content = "Custom" });
+            }
+            var size = ResolutionPreset.Matching(d);
+            ResolutionBox.SelectedItem = ResolutionBox.Items.Cast<ComboBoxItem>().First(i => Equals(i.Tag, size));
+            foreach (var (box, value) in new[] { (WidthBox, d.Width), (HeightBox, d.Height), (DensityBox, d.Density) })
+                if (!box.IsKeyboardFocused) box.Text = value.ToString(); // not the one being typed in
+
+            if (PerformanceBox.Items.Count == 0)
+            {
+                foreach (var p in PerformancePreset.Available(Host))
+                    PerformanceBox.Items.Add(new ComboBoxItem { Content = $"{p.Name} · {p.CpuCores} cores, {p.RamMB / 1024} GB", Tag = p });
+                PerformanceBox.Items.Add(new ComboBoxItem { Content = "Custom" });
+                for (var n = 1; n <= Host.MaxCpuCores; n++) CoresBox.Items.Add(n);
+                for (var gb = AvdSettings.MinRamMB / 1024; gb <= Host.MaxRamMB / 1024; gb++) MemoryBox.Items.Add(gb);
+            }
+            var perf = PerformancePreset.Matching(d);
+            PerformanceBox.SelectedItem = PerformanceBox.Items.Cast<ComboBoxItem>().FirstOrDefault(i => Equals(i.Tag, perf))
+                ?? PerformanceBox.Items[^1];
+            CoresBox.SelectedItem = d.CpuCores;
+            MemoryBox.SelectedItem = d.RamMB / 1024;
+            var suggested = PerformancePreset.Suggested(Host);
+            SuggestedNote.Text = $"Suggested for this PC ({Host.MaxCpuCores} threads, {Math.Round(Host.MaxRamMB * 2 / 1024.0)} GB): {suggested.CpuCores} cores, {suggested.RamMB / 1024} GB.";
+            SuggestedButton.IsEnabled = editable && (d.CpuCores, d.RamMB) != (suggested.CpuCores, suggested.RamMB);
+        }
+        var avdChanged = draft != avdSettings;
+        var rendererChanged = engine != null && runningGuestAngle != options.GuestAngle;
+        ApplyBox.Visibility = avdChanged || rendererChanged || restarting ? Visibility.Visible : Visibility.Collapsed;
+        var problem = avdChanged ? draft?.Problem(Host) : null;
+        ApplyNote.Text = restarting ? "Restarting Android…" : problem ?? "Android restarts to apply this (about 30 seconds).";
+        ApplyNote.Foreground = problem != null ? System.Windows.Media.Brushes.IndianRed : System.Windows.Media.Brushes.LightGray;
+        ApplyButton.IsEnabled = problem == null && !restarting && engine != null;
+        loadingOptions = wasLoading;
+    }
+
+    void Display_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (loadingOptions || draft is not { } d) return;
+        if (sender == OrientationBox && (OrientationBox.SelectedIndex == 0) != d.IsLandscape) d = d.Rotated();
+        else if (sender == ResolutionBox && ResolutionBox.SelectedItem is ComboBoxItem { Tag: ResolutionPreset size }) d = d.With(size);
+        else if (sender == PerformanceBox && PerformanceBox.SelectedItem is ComboBoxItem { Tag: PerformancePreset perf }) d = d.With(perf);
+        else if (sender == CoresBox && CoresBox.SelectedItem is int cores) d = d with { CpuCores = cores };
+        else if (sender == MemoryBox && MemoryBox.SelectedItem is int gb) d = d with { RamMB = gb * 1024 };
+        draft = d;
+        ShowDisplay();
+    }
+
+    void DisplaySize_Changed(object sender, RoutedEventArgs e)
+    {
+        if (loadingOptions || draft is not { } d) return;
+        static int Number(TextBox box, int fallback) => int.TryParse(box.Text, out var n) ? n : fallback;
+        draft = d with { Width = Number(WidthBox, d.Width), Height = Number(HeightBox, d.Height), Density = Number(DensityBox, d.Density) };
+        ShowDisplay();
+    }
+
+    /// Enter takes the number and gives the keyboard back to Android (LostFocus applies it).
+    void Number_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter) return;
+        FocusScreen();
+        e.Handled = true;
+    }
+
+    /// Keys go to Android again (a size box loses focus, which applies it).
+    void FocusScreen()
+    {
+        FocusManager.SetFocusedElement(this, this); // else focusing the window hands focus back to the box
+        Keyboard.Focus(this);
+    }
+
+    void Suggested_Click(object sender, RoutedEventArgs e)
+    {
+        if (draft is not { } d) return;
+        draft = d.With(PerformancePreset.Suggested(Host));
+        ShowDisplay();
+    }
+
+    async void Apply_Click(object sender, RoutedEventArgs e) => await RestartAndroidAsync();
+
+    void Revert_Click(object sender, RoutedEventArgs e)
+    {
+        draft = avdSettings;
+        if (options.GuestAngle != runningGuestAngle)
+        {
+            options.GuestAngle = runningGuestAngle;
+            options.Save();
+            ShowOptions();
+        }
+        ShowDisplay();
     }
 
     /// Keeps the screen window at Android's aspect ratio, centered (DXGI stretches the frame to it).
@@ -460,6 +674,7 @@ public partial class MainWindow : Window
 
     void Screen_MouseDown(object sender, MouseButtonEventArgs e)
     {
+        if (Keyboard.FocusedElement is TextBox) FocusScreen();
         if (SendTouch(e.GetPosition(ScreenArea), pressed: true)) ScreenArea.CaptureMouse();
     }
 
@@ -495,6 +710,7 @@ public partial class MainWindow : Window
 
     void OnKey(KeyEventArgs e, bool down)
     {
+        if (Keyboard.FocusedElement is TextBox) return; // typing a size in the panel
         var key = e.Key == Key.System ? e.SystemKey : e.Key;
         if (down && Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && key is Key.K or Key.G)
         {
@@ -521,7 +737,7 @@ public partial class MainWindow : Window
 
     async void OnClosing(object? sender, System.ComponentModel.CancelEventArgs e)
     {
-        if (stopping || engine == null) { running.Cancel(); return; }
+        if (stopping || engine == null) { stopping = true; running.Cancel(); return; }
         e.Cancel = true; // close again once Android is down
         stopping = true;
         Status.Text = "Shutting down Android...";

@@ -52,7 +52,8 @@ public static class Engine
         var size = DeviceSize.FromAvdConfig(config);
 
         Directory.CreateDirectory(Path.GetDirectoryName(LogFile)!);
-        var log = new StreamWriter(LogFile, append: false) { AutoFlush = true };
+        // Shared: a restart opens it again while the old engine's output pump may still hold it.
+        var log = new StreamWriter(new FileStream(LogFile, FileMode.Create, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete)) { AutoFlush = true };
         var info = new ProcessStartInfo(EmulatorExe)
         {
             UseShellExecute = false, CreateNoWindow = true,
@@ -62,8 +63,12 @@ public static class Engine
         var launchedAt = DateTime.Now.AddSeconds(-1); // file times are coarse
         var process = Process.Start(info)!;
         process.StandardInput.Close(); // the engine must not read ours
-        process.OutputDataReceived += (_, e) => { if (e.Data != null) lock (log) log.WriteLine(e.Data); };
-        process.ErrorDataReceived += (_, e) => { if (e.Data != null) lock (log) log.WriteLine(e.Data); };
+        var logOpen = true;
+        void Write(string? line) { if (line != null) lock (log) if (logOpen) log.WriteLine(line); }
+        process.OutputDataReceived += (_, e) => Write(e.Data);
+        process.ErrorDataReceived += (_, e) => Write(e.Data);
+        process.EnableRaisingEvents = true;
+        process.Exited += (_, _) => { lock (log) { logOpen = false; log.Dispose(); } };
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
 

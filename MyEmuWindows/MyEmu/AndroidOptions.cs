@@ -34,6 +34,8 @@ public sealed class AndroidOptions
     public bool GuestAngle { get; set; } = true;
     /// Game keys on (the mapping itself is per game, in keymaps\).
     public bool GameKeysEnabled { get; set; }
+    /// The MCP endpoint for AI apps runs (Mac: AIControl, the launcher's "Allow AI control"). Off unless chosen.
+    public bool AiControl { get; set; }
 
     [JsonIgnore] public double EffectiveRenderScale => SuperLight ? SuperLightRenderScale : RenderScale;
     [JsonIgnore] public bool EffectiveLightweight => SuperLight || Lightweight;

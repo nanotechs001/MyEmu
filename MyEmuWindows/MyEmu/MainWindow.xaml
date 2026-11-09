@@ -57,7 +57,12 @@
                         <Style TargetType="ComboBox"><Setter Property="Focusable" Value="False"/></Style>
                     </StackPanel.Resources>
 
-                    <TextBlock Style="{StaticResource Heading}" Text="Game keys" Margin="0,0,0,4"/>
+                    <TextBlock Style="{StaticResource Heading}" Text="AI control" Margin="0,0,0,4"/>
+                    <CheckBox x:Name="AiControlBox" Content="Allow AI control (MCP)" Click="AiControl_Click"/>
+                    <TextBox x:Name="AiControlUrl" IsReadOnly="True" Background="Transparent" BorderThickness="0" Foreground="#e6e6e6" FontSize="11"/>
+                    <TextBlock x:Name="AiControlNote" Text="AI apps (Claude Code, Codex…) can see the screen, tap, type and open apps through this local address."/>
+
+                    <TextBlock Style="{StaticResource Heading}" Text="Game keys"/>
                     <TextBlock x:Name="KeysApp" Text="Waiting for Android…"/>
                     <CheckBox x:Name="KeysEnabledBox" Content="Use game keys (Ctrl+Shift+G)" Click="KeysEnabled_Click"/>
                     <Button x:Name="EditKeysButton" Content="Edit key mapping (Ctrl+Shift+K)" Margin="0,6,0,0" Click="EditKeys_Click" Focusable="False"/>
@@ -121,6 +126,39 @@
                         <ComboBoxItem Content="OpenGL"/>
                     </ComboBox>
                     <TextBlock x:Name="RendererNote" Text="Vulkan ran Xerion at the same fps as OpenGL with about half the GPU. Use OpenGL only if a game draws incorrectly."/>
+
+                    <TextBlock Style="{StaticResource Heading}" Text="Display"/>
+                    <TextBlock x:Name="DisplayCurrent" Text="Available once Android has started."/>
+                    <ComboBox x:Name="OrientationBox" Margin="0,4,0,0" SelectionChanged="Display_Changed">
+                        <ComboBoxItem Content="Landscape"/>
+                        <ComboBoxItem Content="Portrait"/>
+                    </ComboBox>
+                    <ComboBox x:Name="ResolutionBox" Margin="0,4,0,0" SelectionChanged="Display_Changed"/>
+                    <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                        <TextBlock Text="W" Margin="0,3,4,0"/><TextBox x:Name="WidthBox" Width="52" LostFocus="DisplaySize_Changed" KeyDown="Number_KeyDown"/>
+                        <TextBlock Text="H" Margin="8,3,4,0"/><TextBox x:Name="HeightBox" Width="52" LostFocus="DisplaySize_Changed" KeyDown="Number_KeyDown"/>
+                        <TextBlock Text="DPI" Margin="8,3,4,0"/><TextBox x:Name="DensityBox" Width="40" LostFocus="DisplaySize_Changed" KeyDown="Number_KeyDown"/>
+                    </StackPanel>
+                    <TextBlock Text="Game-key positions scale with the screen, so your mapping keeps working."/>
+
+                    <TextBlock Style="{StaticResource Heading}" Text="CPU &amp; memory"/>
+                    <ComboBox x:Name="PerformanceBox" SelectionChanged="Display_Changed"/>
+                    <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                        <TextBlock Text="Cores" Margin="0,3,4,0"/><ComboBox x:Name="CoresBox" Width="50" SelectionChanged="Display_Changed"/>
+                        <TextBlock Text="Memory" Margin="10,3,4,0"/><ComboBox x:Name="MemoryBox" Width="64" ItemStringFormat="{}{0} GB" SelectionChanged="Display_Changed"/>
+                    </StackPanel>
+                    <TextBlock x:Name="SuggestedNote"/>
+                    <Button x:Name="SuggestedButton" Content="Use suggested" Margin="0,4,0,0" HorizontalAlignment="Left" Padding="8,2" Focusable="False" Click="Suggested_Click"/>
+
+                    <Border x:Name="ApplyBox" Background="#1e293b" Padding="8" Margin="0,12,0,0" Visibility="Collapsed">
+                        <StackPanel>
+                            <TextBlock x:Name="ApplyNote" Text="Android restarts to apply this (about 30 seconds)."/>
+                            <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                                <Button x:Name="ApplyButton" Content="Apply &amp; Restart" FontWeight="SemiBold" Padding="8,2" Focusable="False" Click="Apply_Click"/>
+                                <Button Content="Revert" Margin="6,0,0,0" Padding="8,2" Focusable="False" Click="Revert_Click"/>
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
                 </StackPanel>
             </ScrollViewer>
         </Border>

@@ -43,8 +43,16 @@ Status (2026-11-08, branch `windows-autopots`):
     by `KeymapOverlay`), Orb/Simple view, tuning. Setups: `%APPDATA%\MyEmu\autopots\<package>.json`,
     the MuMu app's file. ponytail: coordinates are screen pixels, so a setup made in MuMu (1280×860)
     is wrong in MyEmu (1600×900) — re-run Auto-detect; store the screen size if both stay in use.
-  - Not yet: instances, display/device/CPU-memory settings, spoofing, game speed
-    (needs the Custom-model profile), MCP, installer; renderer change needs an in-app Android restart.
+  - Display and CPU & memory (port of `AvdSettings`/`DisplayDrawer`/the CPU & memory section): presets,
+    orientation, typed W/H/DPI, cores/memory with a suggestion, written to the AVD's config.ini by
+    **Apply & Restart** — an in-app Android restart (also applies a renderer change). Checked: 1600×900 →
+    1280×720 → 1600×900 in Xerion's AVD.
+  - AI control (port of `MCPProtocol`/`MCPServer`/`MyEmuMCP`): Options → "Allow AI control (MCP)" serves
+    `http://127.0.0.1:8765/mcp` (Kestrel, loopback, Origin-checked), same tools and JSON as the Mac minus
+    `set_game_speed`; one instance, id `main` / "Android 1". `stop_instance` stops Android, the window
+    stays. Screenshots come from MyEmu's own frames. Add it to Claude Code with
+    `claude mcp add --transport http myemu http://127.0.0.1:8765/mcp`.
+  - Not yet: instances, device settings, spoofing, game speed (needs the Custom-model profile), installer.
 The Mac app in `MyEmu/` is Swift/AppKit/Metal and cannot be compiled for Windows — the Windows
 version is a new native app that reuses MyEmu's file formats, engine commands and test fixtures.
 
