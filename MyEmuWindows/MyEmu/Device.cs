@@ -100,13 +100,20 @@ public sealed record DeviceSettings(
 {
     public static readonly DeviceSettings Default = new(DeviceProfile.PlayStore, DeviceIdentity.Stock, new PhoneLine());
 
+    /// How fast games run (Custom model only; Mac: EmulatorModel.gameSpeed). One of AndroidOptions.GameSpeeds.
+    [JsonPropertyName("gameSpeed")] public double GameSpeed { get; init; } = 1.0;
+
     public static string Folder { get; set; } =
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MyEmu", "device");
     public static string FilePath(string instanceId) => Path.Combine(Folder, $"{instanceId}.json");
 
     public static DeviceSettings Load(string instanceId)
     {
-        try { return JsonSerializer.Deserialize<DeviceSettings>(File.ReadAllText(FilePath(instanceId))) ?? Default; }
+        try
+        {
+            var settings = JsonSerializer.Deserialize<DeviceSettings>(File.ReadAllText(FilePath(instanceId))) ?? Default;
+            return AndroidOptions.GameSpeeds.Contains(settings.GameSpeed) ? settings : settings with { GameSpeed = 1.0 };
+        }
         catch (Exception e) when (e is IOException or JsonException or UnauthorizedAccessException) { return Default; }
     }
 
@@ -136,8 +143,38 @@ public static class DeviceSetup
                 + $" -e \"s/^(ro\\.product\\.[a-z_]+\\.brand)=.*/\\1={identity.Brand}/\""
                 + $" -e \"s/^(ro\\.product\\.[a-z_]+\\.manufacturer)=.*/\\1={identity.Manufacturer}/\""
                 + $" -e \"s/^(ro\\.product\\.[a-z_]+\\.model)=.*/\\1={identity.Model}/\" {file}";
+        // Restoring the backup also restores the stock native bridge; keep the speed bridge once installed.
+        if (file == "/system/build.prop") steps += $" && {{ [ ! -f {SpeedBridge} ] || sed -i {NativeBridgeSed} {file}; }}";
         return steps + " || exit 1; fi";
     }));
+
+    // --- Game speed (Mac: Engine.installSpeedLibrary; Windows needs the native-bridge route, see gpu_tls_bridge.c)
+
+    /// Installed name blends with system libs (Mac: AndroidCommands.speedLibrary).
+    public const string SpeedBridge = "/system/lib64/libgpu_tls.so";
+    const string NativeBridgeSed = "'s/^ro.dalvik.vm.native.bridge=.*/ro.dalvik.vm.native.bridge=libgpu_tls.so/'";
+    /// Shipped next to the app (MyEmuWindows/Android/speed/build.ps1); absent in a build without it.
+    public static string SpeedBridgeFile => Path.Combine(AppContext.BaseDirectory, "Assets", "libgpu_tls.so");
+
+    /// Prints "ready" when Android runs the speed bridge with this library (`sha256` of the shipped file).
+    public static string SpeedBridgeReadyCheck(string sha256) =>
+        $"[ \"$(getprop ro.dalvik.vm.native.bridge)\" = libgpu_tls.so ] && sha256sum {SpeedBridge} | grep -q {sha256} && echo ready";
+
+    /// Installs the speed bridge in place of the stock translator entry. True when it changed something
+    /// (Android has then rebooted once: the bridge loads with zygote).
+    public static async Task<bool> EnsureSpeedBridgeAsync(string serial)
+    {
+        if (!File.Exists(SpeedBridgeFile)) return false;
+        var sha256 = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(SpeedBridgeFile))).ToLowerInvariant();
+        if ((await Engine.AdbAsync(serial, ["wait-for-device", "shell", $"{BootWait}; {SpeedBridgeReadyCheck(sha256)} || true"])).Contains("ready"))
+            return false;
+        await RemountAsync(serial);
+        await Engine.AdbAsync(serial, ["push", SpeedBridgeFile, SpeedBridge]);
+        await Engine.AdbAsync(serial, ["shell", $"chmod 644 {SpeedBridge} && chcon u:object_r:system_lib_file:s0 {SpeedBridge}"
+            + $" && sed -i {NativeBridgeSed} /system/build.prop"]);
+        await RebootAsync(serial);
+        return true;
+    }
 
     /// Makes Android report `identity`. True when it changed something (Android has then rebooted once).
     public static async Task<bool> ApplyIdentityAsync(DeviceIdentity identity, string serial)

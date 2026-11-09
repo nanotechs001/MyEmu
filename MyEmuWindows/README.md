@@ -48,8 +48,7 @@ Status (2026-11-08, branch `windows-autopots`):
     **Apply & Restart** — an in-app Android restart (also applies a renderer change). Checked: 1600×900 →
     1280×720 → 1600×900 in Xerion's AVD.
   - AI control (port of `MCPProtocol`/`MCPServer`/`MyEmuMCP`): Options → "Allow AI control (MCP)" serves
-    `http://127.0.0.1:8765/mcp` (Kestrel, loopback, Origin-checked), same tools and JSON as the Mac minus
-    `set_game_speed`; one instance, id `main` / "Android 1". `stop_instance` stops Android, the window
+    `http://127.0.0.1:8765/mcp` (Kestrel, loopback, Origin-checked), same tools and JSON as the Mac; one instance, id `main` / "Android 1". `stop_instance` stops Android, the window
     stays. Screenshots come from MyEmu's own frames. Add it to Claude Code with
     `claude mcp add --transport http myemu http://127.0.0.1:8765/mcp`.
   - Instances (port of `Instances`/`InstanceManager`/`InstancesDrawer`): one process, one window per
@@ -71,9 +70,19 @@ Status (2026-11-08, branch `windows-autopots`):
     in `/data/myemu-play` (labelled `apk_data_file`) with symlinks at the `/product`/`/system_ext` paths —
     Android scans them as privileged system apps. Checked: fresh Custom model → Galaxy S24 Ultra
     (samsung/SM-S928B, About shows the name), Google Play opens to sign-in, ~105 s; back to Play Store keeps Xerion.
+  - Game speed (Custom model; Options → Game speed, MCP `set_game_speed`; per instance in
+    `device\<id>.json` as `gameSpeed`). The Mac's LD_PRELOAD route fails here: a `wrap.<pkg>` launch
+    starts without the ARM translator (Xerion's arm64 libs fail to load), and zygote ignores LD_PRELOAD
+    (secure exec). Instead `Android/speed/gpu_tls_bridge.c` (build: `Android/speed/build.ps1`, needs the
+    NDK; output `MyEmu/Assets/libgpu_tls.so`, committed) is installed as the native bridge
+    (`ro.dalvik.vm.native.bridge=libgpu_tls.so` in `/system/build.prop`, kept by the model script). It
+    loads `libndk_translation.so` and patches its `dlsym`/`clock_gettime`/`syscall` imports: the guest
+    libc reaches the host clock through trampolines found with dlsym (~4000 reads/s in Xerion). Speed
+    and game: `debug.gpu.tls` / `debug.gpu.tlsp`, set when a game (per `cmd game`) comes to the front.
+    Checked: Xerion's login animation loop 13.1 s at 1× → 4.36 s at 3×, same fps. Unlike the Mac, every
+    ARM library in the game is scaled (incl. its anti-cheat/SDKs); playing logged in at speed not tested.
   - Not yet: IMEI (the Mac patches arm64 code in the radio library and injects into the engine; the x86_64
-    image needs its own patch), game speed (`libmyemuspeed.so` hooks the arm64 game's clock; under
-    ndk_translation an x86_64 hook may not see it — needs a test), installer.
+    image needs its own patch), installer.
 The Mac app in `MyEmu/` is Swift/AppKit/Metal and cannot be compiled for Windows — the Windows
 version is a new native app that reuses MyEmu's file formats, engine commands and test fixtures.
 
@@ -140,11 +149,7 @@ Port the tests in `MyEmu/Tests/MyEmuTests/` with them; the AutoPots screenshot f
 - **Display:** Mac uses CAContext/CALayerHost (`DirectDisplay.swift`) and a Metal fallback
   (`SharedFrameBuffer.swift`, `ScreenView.swift`). Windows: put gfxstream's render subwindow
   into our HWND as a child window; fallback = gRPC/shared-memory frames drawn with D3D11.
-- **Speed hook:** the guest-side library is Android code, so it ports — `MyEmu/Assets/libmyemuspeed.so`
-  (source `MyEmu/Android/speed/`) is arm64; build an **x86_64** variant too for the x86_64 image
-  (check which one the translated game actually loads). Patched-APK route: `MyEmu/Android/speedmod/`
-  (`patch-xerion.sh` is bash; run it in Git Bash/WSL or port to PowerShell). Mac-side DYLD
-  injection becomes DLL injection if anything host-side is still needed.
+- **Speed hook:** done as a native bridge, see Status (the Mac's arm64 preload can't load here).
 - **VPN per instance:** the macOS mechanism doesn't port; redo with Windows routing later.
 - **Emulator-detection spoofing:** apply the same spoofed props as the Mac code
   (`Engine+Device.swift`) on the x86_64 image and recheck — x86 images expose extra tells
@@ -167,7 +172,7 @@ Port the tests in `MyEmu/Tests/MyEmuTests/` with them; the AutoPots screenshot f
 - Build: `dotnet publish -c Release -r win-x64 --self-contained` (no .NET install needed on the PC).
 - Installer: **Inno Setup** (`iscc`) script in `MyEmuWindows/installer/`, bundling the published
   app, the three Google packages above extracted into `{app}\sdk\` (emulator, platform-tools,
-  system image), `libmyemuspeed.so`, and the icon from `MyEmu/Assets/AppIcon.png`.
+  system image), and the icon from `MyEmu/Assets/AppIcon.png`.
   Expect ~2–3 GB. The app must use the bundled SDK path, not `%LOCALAPPDATA%\Android\Sdk`.
 - Installer checks: Windows 10 2004+ x64; Windows Hypervisor Platform enabled (offer to enable —
   needs admin + reboot).

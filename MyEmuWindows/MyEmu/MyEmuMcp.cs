@@ -8,12 +8,14 @@ using System.Windows.Media.Imaging;
 namespace MyEmu;
 
 /// One instance as the MCP tools see it (read on the UI thread). Running: its window is open.
-public sealed record McpInstanceState(string Id, string Name, bool Running, string? Serial, string Status, string? ForegroundApp);
+public sealed record McpInstanceState(string Id, string Name, bool Running, string? Serial, string Status, string? ForegroundApp,
+    DeviceProfile Profile = DeviceProfile.PlayStore, double GameSpeed = 1.0);
 
 /// What an AI can do over MCP (Mac: MyEmuMCP.swift): what you do in MyEmu's windows — start and stop
 /// Androids, look at a screen, tap, swipe, type, press keys and open apps.
 public sealed class MyEmuMcp(Func<Task<IReadOnlyList<McpInstanceState>>> instances, Func<string, Task<string>> start,
-    Func<string, Task<string>> stop, Func<string, (byte[] Rgba, int Width, int Height)?> screen)
+    Func<string, Task<string>> stop, Func<string, (byte[] Rgba, int Width, int Height)?> screen,
+    Func<string, double, Task<string>>? setSpeed = null)
 {
     /// Screenshots are scaled to fit this, small enough for an AI to read quickly.
     public const int MaxScreenshotSide = 1280;
@@ -59,10 +61,9 @@ public sealed class MyEmuMcp(Func<Task<IReadOnlyList<McpInstanceState>>> instanc
         ["volume_up"] = "KEYCODE_VOLUME_UP", ["volume_down"] = "KEYCODE_VOLUME_DOWN",
     };
 
-    // ponytail: no set_game_speed yet — Windows MyEmu has no game speed; add it with the speed port.
     public static readonly McpTool[] Tools =
     [
-        Tool("list_instances", "Every Android in MyEmu: id, name, whether it's running and ready, and for running ones their status and app in front."),
+        Tool("list_instances", "Every Android in MyEmu: id, name, profile, game speed, whether it's running and ready, and for running ones their status and app in front."),
         OnInstance("start_instance", "Starts an instance (opens its window, or starts its Android if the window is open). Android takes a minute or so: poll list_instances until ready is true."),
         OnInstance("stop_instance", "Shuts an instance's Android down (its window stays open)."),
         OnInstance("screenshot", "The instance's screen as an image. tap, long_press and swipe take x/y in this image's pixels."),
@@ -84,6 +85,8 @@ public sealed class MyEmuMcp(Func<Task<IReadOnlyList<McpInstanceState>>> instanc
         OnInstance("list_apps", "Apps installed on the instance (package names), for launch_app.",
             new() { ["include_system"] = new JsonObject { ["type"] = "boolean", ["description"] = "Also list Android's own apps; default false" } }),
         OnInstance("launch_app", "Opens an app by its package name.", new() { ["package"] = new JsonObject { ["type"] = "string" } }, ["package"]),
+        OnInstance("set_game_speed", "Sets how fast games run on this instance (Custom model profile only). Applies live to the game in front.",
+            new() { ["speed"] = new JsonObject { ["type"] = "number", ["enum"] = new JsonArray(AndroidOptions.GameSpeeds.Select(s => (JsonNode)s).ToArray()) } }, ["speed"]),
     ];
 
     async Task<IReadOnlyList<McpContent>> CallAsync(string name, JsonObject arguments)
@@ -134,6 +137,16 @@ public sealed class MyEmuMcp(Func<Task<IReadOnlyList<McpInstanceState>>> instanc
             }
             case "list_apps": return [new McpText(await ListAppsAsync(arguments))];
             case "launch_app": return [new McpText(await LaunchAppAsync(arguments))];
+            case "set_game_speed":
+            {
+                var instance = await InstanceAsync(arguments);
+                if (instance.Profile != DeviceProfile.CustomModel)
+                    throw new McpToolError($"Game speed needs the Custom model profile; {instance.Name} runs {instance.Profile.Title()}.");
+                if (arguments["speed"] is not JsonValue v || !v.TryGetValue(out double speed) || !AndroidOptions.GameSpeeds.Contains(speed))
+                    throw new McpToolError($"speed must be one of {string.Join(", ", AndroidOptions.GameSpeeds)}.");
+                if (setSpeed == null) throw new McpUnknownTool(name);
+                return [new McpText(await setSpeed(instance.Id, speed))];
+            }
             default: throw new McpUnknownTool(name);
         }
     }
@@ -145,7 +158,7 @@ public sealed class MyEmuMcp(Func<Task<IReadOnlyList<McpInstanceState>>> instanc
         var rows = new JsonArray();
         foreach (var s in await instances())
         {
-            var row = new JsonObject { ["id"] = s.Id, ["name"] = s.Name, ["running"] = s.Running };
+            var row = new JsonObject { ["id"] = s.Id, ["name"] = s.Name, ["running"] = s.Running, ["profile"] = s.Profile.Title(), ["gameSpeed"] = s.GameSpeed };
             row["ready"] = s.Running && s.Serial != null && await IsBootedAsync(s.Serial);
             if (s.Running)
             {

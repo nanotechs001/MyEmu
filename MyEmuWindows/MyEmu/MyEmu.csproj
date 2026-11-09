@@ -28,6 +28,11 @@
              Link="AutoPots\%(Filename)%(Extension)" />
   </ItemGroup>
 
+  <!-- Game speed's native bridge, installed on the Custom model profile (Android/speed/build.ps1). -->
+  <ItemGroup>
+    <None Include="Assets\libgpu_tls.so" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
   <!-- The same engine API the Mac app uses. -->
   <ItemGroup>
     <Protobuf Include="..\..\MyEmu\Sources\MyEmu\emulator_controller.proto" Link="emulator_controller.proto" GrpcServices="Client" />

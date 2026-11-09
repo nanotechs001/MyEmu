@@ -197,10 +197,14 @@ public partial class MainWindow : Window
                 Say("Checking Google Play Store…");
                 if (await DeviceSetup.EnsurePlayStoreAsync(serial, instance.Avd(DeviceProfile.PlayStore))) Say("Google Play Store added");
                 if (cancel.IsCancellationRequested) return;
+                Say("Checking game speed…");
+                if (await DeviceSetup.EnsureSpeedBridgeAsync(serial)) Say("Game speed installed");
+                if (cancel.IsCancellationRequested) return;
                 Say("Setting device model…");
                 if (await DeviceSetup.ApplyIdentityAsync(identity, serial)) Say("Restarted with the new model");
                 await DeviceSetup.SetDeviceNameAsync(identity.MarketName, serial);
                 Say(null);
+                await Dispatcher.BeginInvoke(ApplyGameSpeed); // the reboots above cleared the live speed
             }
             catch (Exception e) when (!cancel.IsCancellationRequested) { Say($"Device setup failed: {e.Message}"); }
             catch { } // Android stopped meanwhile
@@ -242,7 +246,39 @@ public partial class MainWindow : Window
         DeviceApplyNote.Foreground = problem != null ? System.Windows.Media.Brushes.IndianRed : System.Windows.Media.Brushes.LightGray;
         DeviceApplyButton.Content = profileChanged || phoneChanged ? "Apply & Restart" : "Apply";
         DeviceApplyButton.IsEnabled = problem == null && !restarting && engine != null;
+
+        if (SpeedBox.Items.Count == 0)
+            foreach (var speed in AndroidOptions.GameSpeeds)
+                SpeedBox.Items.Add(new ComboBoxItem { Content = speed == 1 ? "Normal" : $"{speed.ToString(System.Globalization.CultureInfo.InvariantCulture)}×", Tag = speed });
+        SpeedBox.SelectedItem = SpeedBox.Items.Cast<ComboBoxItem>().First(i => (double)i.Tag == device.GameSpeed);
+        SpeedBox.IsEnabled = device.Profile == DeviceProfile.CustomModel;
+        SpeedNote.Text = device.Profile == DeviceProfile.CustomModel
+            ? "Runs the game's own clock faster or slower: only the game in front, not the rest of Android. Applies live."
+            : "Game speed needs the Custom model profile (its writable system). Switch it under Device.";
         loadingOptions = wasLoading;
+    }
+
+    void Speed_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (loadingOptions || SpeedBox.SelectedItem is not ComboBoxItem { Tag: double speed }) return;
+        SetGameSpeed(speed);
+    }
+
+    /// Saves and applies this instance's game speed (also the MCP's set_game_speed).
+    internal void SetGameSpeed(double speed)
+    {
+        device = device with { GameSpeed = speed };
+        deviceDraft = deviceDraft with { GameSpeed = speed };
+        device.Save(instance.Id);
+        ShowDevice();
+        ApplyGameSpeed();
+    }
+
+    /// Points the speed bridge at the game in front and sets its speed (Custom model only: the bridge is there).
+    void ApplyGameSpeed()
+    {
+        if (device.Profile != DeviceProfile.CustomModel || currentApp is not { } app || !AndroidWatch.IsValidPackage(app)) return;
+        RunInAndroid(AndroidCommands.GameSpeed(device.GameSpeed, app));
     }
 
     void Device_Changed(object sender, SelectionChangedEventArgs e)
@@ -287,7 +323,7 @@ public partial class MainWindow : Window
 
     /// Running: this window's Android is up or starting (not stopped over MCP).
     internal McpInstanceState McpState(Instance current) =>
-        new(current.Id, current.Name, engine != null || !engineTask.IsCompleted, engine?.Serial, Status.Text, currentApp);
+        new(current.Id, current.Name, engine != null || !engineTask.IsCompleted, engine?.Serial, Status.Text, currentApp, device.Profile, device.GameSpeed);
 
     internal string McpStart()
     {
@@ -463,6 +499,7 @@ public partial class MainWindow : Window
         pots.AppDidChange(package);
         ScheduleTypingCheck(); // the new app may open with a text box focused
         ApplyRate();
+        ApplyGameSpeed();
     }
 
     // --- Typing: game keys pause while a text field has Android's keyboard (Mac: EmulatorModel.watchTyping)

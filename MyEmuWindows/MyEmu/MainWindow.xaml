@@ -177,6 +177,10 @@
                         </StackPanel>
                     </Border>
 
+                    <TextBlock Style="{StaticResource Heading}" Text="Game speed"/>
+                    <ComboBox x:Name="SpeedBox" SelectionChanged="Speed_Changed"/>
+                    <TextBlock x:Name="SpeedNote"/>
+
                     <TextBlock Style="{StaticResource Heading}" Text="CPU &amp; memory"/>
                     <ComboBox x:Name="PerformanceBox" SelectionChanged="Display_Changed"/>
                     <StackPanel Orientation="Horizontal" Margin="0,4,0,0">

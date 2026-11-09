@@ -36,14 +36,31 @@ public class DeviceTests
         var script = DeviceSetup.IdentityScript(DeviceIdentity.Presets[0]);
         Assert.Contains("cp -p /system/build.prop.myemu-orig /system/build.prop && sed -i -E", script);
         Assert.Contains(@"\1=SM-S928B/", script);
-        Assert.DoesNotContain("sed", DeviceSetup.IdentityScript(DeviceIdentity.Stock)); // stock: just restore the originals
+        Assert.DoesNotContain("sed -i -E", DeviceSetup.IdentityScript(DeviceIdentity.Stock)); // stock: just restore the originals
     }
 
     [Fact]
     public void SettingsJsonIsTheMacsShape()
     {
         var json = JsonSerializer.Serialize(DeviceSettings.Default with { Profile = DeviceProfile.CustomModel });
-        Assert.Equal("""{"profile":"customModel","identity":{"brand":"google","manufacturer":"Google","model":"sdk_gphone64_x86_64","marketName":"sdk_gphone64_x86_64"},"phoneLine":{"phoneNumber":"","imei":""}}""", json);
+        Assert.Equal("""{"profile":"customModel","identity":{"brand":"google","manufacturer":"Google","model":"sdk_gphone64_x86_64","marketName":"sdk_gphone64_x86_64"},"phoneLine":{"phoneNumber":"","imei":""},"gameSpeed":1}""", json);
         Assert.Equal(DeviceProfile.CustomModel, JsonSerializer.Deserialize<DeviceSettings>(json)!.Profile);
+        // files from before game speed: normal speed
+        Assert.Equal(1.0, JsonSerializer.Deserialize<DeviceSettings>(json.Replace(""","gameSpeed":1""", ""))!.GameSpeed);
+    }
+
+    [Fact]
+    public void GameSpeedSurvivesModelChangesAndAppliesToGamesOnly()
+    {
+        // Rewriting the model restores build.prop from its backup; the speed bridge line comes back, if installed.
+        var script = DeviceSetup.IdentityScript(DeviceIdentity.Presets[0]);
+        Assert.Contains($"[ ! -f {DeviceSetup.SpeedBridge} ] || sed -i 's/^ro.dalvik.vm.native.bridge=.*/ro.dalvik.vm.native.bridge=libgpu_tls.so/' /system/build.prop", script);
+        Assert.Equal(2, script.Split("native.bridge=.*").Length); // only for /system/build.prop
+        Assert.Contains("native.bridge", DeviceSetup.IdentityScript(DeviceIdentity.Stock));
+
+        var command = AndroidCommands.GameSpeed(2.5, "com.com.Xerion");
+        Assert.Equal("cmd game list-modes com.com.Xerion | grep -q 'available game modes: \\[[a-z]' && setprop debug.gpu.tlsp com.com.Xerion; "
+            + "setprop debug.gpu.tls 2.50", command);
+        Assert.Contains(MyEmuMcp.Tools, t => t.Name == "set_game_speed");
     }
 }

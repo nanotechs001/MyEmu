@@ -35,6 +35,12 @@ public static class InstanceManager
 
     public static MainWindow? Window(string id) => windows.GetValueOrDefault(id);
 
+    static McpInstanceState StoppedState(Instance i)
+    {
+        var device = DeviceSettings.Load(i.Id);
+        return new(i.Id, i.Name, false, null, "Stopped", null, device.Profile, device.GameSpeed);
+    }
+
     /// Shows the instance's window, opening it (which starts its Android) if needed.
     public static void Open(string id)
     {
@@ -131,7 +137,7 @@ public static class InstanceManager
             var dispatcher = Application.Current.Dispatcher;
             var tools = new MyEmuMcp(
                 instances: () => dispatcher.InvokeAsync(() => (IReadOnlyList<McpInstanceState>)List.Instances
-                    .Select(i => Window(i.Id)?.McpState(i) ?? new McpInstanceState(i.Id, i.Name, false, null, "Stopped", null)).ToList()).Task,
+                    .Select(i => Window(i.Id)?.McpState(i) ?? StoppedState(i)).ToList()).Task,
                 start: id => dispatcher.InvokeAsync(() =>
                 {
                     if (Window(id) is { } window) return window.McpStart();
@@ -139,7 +145,13 @@ public static class InstanceManager
                     return $"Starting {List.Find(id)?.Name}. Poll list_instances until ready is true.";
                 }).Task,
                 stop: id => dispatcher.InvokeAsync(() => Window(id) is { } window ? window.McpStopAsync() : Task.FromResult($"{List.Find(id)?.Name} isn't running.")).Task.Unwrap(),
-                screen: id => dispatcher.Invoke(() => Window(id))?.ScreenCopy());
+                screen: id => dispatcher.Invoke(() => Window(id))?.ScreenCopy(),
+                setSpeed: (id, speed) => dispatcher.InvokeAsync(() =>
+                {
+                    if (Window(id) is { } window) window.SetGameSpeed(speed);
+                    else (DeviceSettings.Load(id) with { GameSpeed = speed }).Save(id);
+                    return $"Game speed {speed}× on {List.Find(id)?.Name}. It applies to the game in front.";
+                }).Task);
             try { mcp = await McpHttpServer.StartAsync(tools.Dispatcher); }
             catch (Exception e) { AiControlProblem = $"Couldn't start on port {McpHttpServer.Port}: {e.Message}"; }
         }

@@ -14,6 +14,7 @@ public sealed class AndroidOptions
     /// Saves GPU time with a barely softer image (85% measured ≈ 10% less GPU at the same fps on the Mac).
     public const double DefaultRenderScale = 0.85;
     public static readonly int[] FpsChoices = [240, 180, 165, 144, 120, 90, 60, 30];
+    public static readonly double[] GameSpeeds = [1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 10.0];
     public const int BackgroundFps = 30;
     /// Super Light: games as light as possible, looks don't matter (farming, many instances).
     public const double SuperLightRenderScale = 0.1;
@@ -106,6 +107,13 @@ public static class AndroidCommands
         return $"cmd game list-modes {package} | grep -q 'available game modes: \\[[a-z]' && "
             + $"cmd game set --fps {fps} --downscale {scale} {package}; true";
     }
+
+    /// Live speed for the speed bridge (Device.cs, gpu_tls_bridge.c). A game in front becomes the one that's
+    /// sped up; other apps leave it alone, so it keeps its speed behind them. Names avoid "myemu"/"speed".
+    /// `package` must pass `AndroidWatch.IsValidPackage`.
+    public static string GameSpeed(double speed, string package) =>
+        $"cmd game list-modes {package} | grep -q 'available game modes: \\[[a-z]' && setprop debug.gpu.tlsp {package}; "
+        + $"setprop debug.gpu.tls {speed.ToString("0.00", CultureInfo.InvariantCulture)}";
 }
 
 /// Google apps a game emulator doesn't need (Mac measurement: about 640 MB less RAM, nothing broken).
