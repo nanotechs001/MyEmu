@@ -17,6 +17,16 @@ public static class Engine
         .FirstOrDefault(d => File.Exists(Path.Combine(d, "emulator", "emulator.exe"))) ?? Path.Combine(LocalAppData, "Android", "Sdk");
 
     public static string EmulatorExe => Path.Combine(Sdk, "emulator", "emulator.exe");
+
+    /// The engine finds system images through the SDK root; an Android Studio install's variables
+    /// would otherwise point it at another SDK.
+    public static ProcessStartInfo EmulatorStartInfo()
+    {
+        var info = new ProcessStartInfo(EmulatorExe) { UseShellExecute = false, CreateNoWindow = true };
+        info.Environment["ANDROID_SDK_ROOT"] = Sdk;
+        info.Environment.Remove("ANDROID_HOME");
+        return info;
+    }
     public static string AdbExe => Path.Combine(Sdk, "platform-tools", "adb.exe");
     /// One per AVD: instances run side by side.
     public static string LogFile(string avd) => Path.Combine(LocalAppData, "MyEmu", avd == "myemu" ? "engine.log" : $"engine-{avd}.log");
@@ -60,11 +70,8 @@ public static class Engine
         Directory.CreateDirectory(Path.GetDirectoryName(LogFile(avd))!);
         // Shared: a restart opens it again while the old engine's output pump may still hold it.
         var log = new StreamWriter(new FileStream(LogFile(avd), FileMode.Create, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete)) { AutoFlush = true };
-        var info = new ProcessStartInfo(EmulatorExe)
-        {
-            UseShellExecute = false, CreateNoWindow = true,
-            RedirectStandardOutput = true, RedirectStandardError = true, RedirectStandardInput = true,
-        };
+        var info = EmulatorStartInfo();
+        info.RedirectStandardOutput = info.RedirectStandardError = info.RedirectStandardInput = true;
         foreach (var arg in Arguments(avd, port, refreshRate, guestAngle, writableSystem, phoneNumber)) info.ArgumentList.Add(arg);
         var launchedAt = DateTime.Now.AddSeconds(-1); // file times are coarse
         var process = Process.Start(info)!;

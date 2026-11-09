@@ -81,8 +81,15 @@ Status (2026-11-08, branch `windows-autopots`):
     and game: `debug.gpu.tls` / `debug.gpu.tlsp`, set when a game (per `cmd game`) comes to the front.
     Checked: Xerion's login animation loop 13.1 s at 1× → 4.36 s at 3×, same fps. Unlike the Mac, every
     ARM library in the game is scaled (incl. its anti-cheat/SDKs); playing logged in at speed not tested.
+  - Offline installer: `installer\build.ps1` (needs Inno Setup 6.5+ and the SDK parts in
+    `%LOCALAPPDATA%\Android\Sdk`) → `installer\output\MyEmu-Setup-<version>.exe`. Per-user install (no
+    admin) to `%LOCALAPPDATA%\Programs\MyEmu` with the emulator, adb and both Android 15 x86_64 images in
+    `sdk\` (the app prefers it, and starts the engine with `ANDROID_SDK_ROOT` set to it); offers to turn on
+    Windows Hypervisor Platform (elevated, then restart). On a new PC the first start creates the main
+    Android from `AvdFiles.DefaultConfig` with CPU/memory suggested for the PC. Uninstalling keeps Androids
+    (`%USERPROFILE%\.android\avd`) and settings (`%LOCALAPPDATA%\MyEmu`).
   - Not yet: IMEI (the Mac patches arm64 code in the radio library and injects into the engine; the x86_64
-    image needs its own patch), installer.
+    image needs its own patch).
 The Mac app in `MyEmu/` is Swift/AppKit/Metal and cannot be compiled for Windows — the Windows
 version is a new native app that reuses MyEmu's file formats, engine commands and test fixtures.
 

@@ -68,6 +68,12 @@ public class InstancesTests
             await Assert.ThrowsAsync<IOException>(() => AvdFiles.CloneAsync("myemu", "myemu-3"));
             Assert.False(await AvdFiles.CloneAsync("never-made", "myemu-4"));
 
+            AvdFiles.Ensure("first", "not-made-yet"); // a new PC: the built-in Play Store config
+            var first = Ini.Parse(File.ReadAllText(Path.Combine(root, "first.avd", "config.ini")));
+            Assert.Equal(("system-images\\android-35\\google_apis_playstore\\x86_64\\", "yes", "1600", "landscape"),
+                (first["image.sysdir.1"], first["PlayStore.enabled"], first["hw.lcd.width"], first["hw.initialOrientation"]));
+            Assert.Equal(PerformancePreset.Suggested(HostLimits.Current).CpuCores.ToString(), first["hw.cpu.ncore"]);
+
             AvdFiles.Delete("myemu-3");
             Assert.False(Directory.Exists(copy) || File.Exists(Path.Combine(root, "myemu-3.ini")));
             AvdFiles.Delete("myemu-3"); // already gone: fine

@@ -1,0 +1,16 @@
+MyEmu bundles these parts of Google's Android SDK, unchanged:
+
+  - Android Emulator 37.2.12
+  - Android SDK Platform-Tools 37.0.1 (adb)
+  - Android 15 (API 35) system images for x86_64: "Google Play" and "Google APIs"
+
+They are provided by Google under the Android Software Development Kit License Agreement:
+
+  https://developer.android.com/studio/terms
+
+The system images also include Google apps (Google Play Store and Google Play services) under
+Google's terms, and open-source components whose licenses are listed in the NOTICE.txt file in each
+system image folder (sdk\system-images\android-35\...\NOTICE.txt after installing).
+
+By installing MyEmu you accept the Android Software Development Kit License Agreement and the terms
+above for these components.

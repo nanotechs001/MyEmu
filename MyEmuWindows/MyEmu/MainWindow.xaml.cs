@@ -93,8 +93,8 @@ public partial class MainWindow : Window
             runningGuestAngle = options.GuestAngle;
             var profile = device.Profile;
             avd = instance.Avd(profile);
-            if (instance.Number > 1 || profile != DeviceProfile.PlayStore) // a new instance's or profile's first start
-                AvdFiles.Ensure(avd, Instance.Main.Avd, profile == DeviceProfile.PlayStore ? null : profile.ImageConfig());
+            // the first start of a new PC, instance or profile
+            AvdFiles.Ensure(avd, Instance.Main.Avd, profile == DeviceProfile.PlayStore ? null : profile.ImageConfig());
             var custom = profile == DeviceProfile.CustomModel;
             engine = await Engine.StartAsync(avd, instance.GrpcPort, displayMaxFps, runningGuestAngle, cancel,
                 writableSystem: profile.NeedsWritableSystem(), phoneNumber: custom ? device.PhoneLine.PhoneNumber : "");

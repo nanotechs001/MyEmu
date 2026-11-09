@@ -22,3 +22,7 @@ MyEmu/Android/speedmod/app/.cxx/
 MyEmu/Android/speedmod/app/build/
 MyEmu/Android/speedmod/local.properties
 MyEmu/Android/speedmod/patch.keystore
+
+# Windows installer build output (MyEmuWindows/installer/build.ps1)
+MyEmuWindows/installer/publish/
+MyEmuWindows/installer/output/

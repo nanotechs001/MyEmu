@@ -8,6 +8,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <RootNamespace>MyEmu</RootNamespace>
+    <!-- The Mac's AppIcon.png as .ico; WPF windows show the exe's icon. -->
+    <ApplicationIcon>Assets\AppIcon.ico</ApplicationIcon>
     <AssemblyName>MyEmu</AssemblyName>
     <DefaultItemExcludes>$(DefaultItemExcludes);Tests\**</DefaultItemExcludes>
   </PropertyGroup>

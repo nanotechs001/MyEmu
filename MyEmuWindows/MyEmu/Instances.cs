@@ -91,13 +91,43 @@ public static class AvdFiles
     static void WriteIni(string avd) =>
         File.WriteAllText(IniPath(avd), $"avd.ini.encoding=UTF-8\npath={Dir(avd)}\npath.rel=avd\\{avd}.avd\ntarget=android-35\n");
 
-    /// Creates `avd` the first time from `templateAvd`'s config (same image), in landscape with
-    /// CPU and memory suggested for this PC. Android's data starts fresh on its first boot.
+    /// The first Android on a new PC: the Play Store image, as phase 0 tested it (size, CPU and memory
+    /// are then set by Ensure). No `hw.device.name`: the engine strips it anyway (Engine.EnforcedConfig).
+    public const string DefaultConfig = """
+        PlayStore.enabled=yes
+        abi.type=x86_64
+        avd.ini.encoding=UTF-8
+        disk.dataPartition.size=16G
+        hw.audioInput=yes
+        hw.audioOutput=yes
+        hw.cpu.arch=x86_64
+        hw.cpu.ncore=4
+        hw.device.manufacturer=Google
+        hw.gltransport=asg
+        hw.gpu.enabled=yes
+        hw.gpu.mode=host
+        hw.initialOrientation=landscape
+        hw.keyboard=yes
+        hw.lcd.density=240
+        hw.lcd.height=900
+        hw.lcd.width=1600
+        hw.ramSize=4096
+        image.sysdir.1=system-images\android-35\google_apis_playstore\x86_64\
+        showDeviceFrame=no
+        tag.id=google_apis_playstore
+        tag.ids=google_apis_playstore
+        target=android-35
+
+        """;
+
+    /// Creates `avd` the first time from `templateAvd`'s config (same image; DefaultConfig on a new PC),
+    /// in landscape with CPU and memory suggested for this PC. Android's data starts fresh on its first boot.
     public static void Ensure(string avd, string templateAvd, IReadOnlyDictionary<string, string>? imageConfig = null)
     {
         if (Exists(avd)) return;
         Directory.CreateDirectory(Dir(avd));
-        var config = File.ReadAllText(Path.Combine(Dir(templateAvd), "config.ini"));
+        var template = Path.Combine(Dir(templateAvd), "config.ini");
+        var config = File.Exists(template) ? File.ReadAllText(template) : DefaultConfig;
         var s = AvdSettings.FromConfig(Ini.Parse(config));
         s = (s.IsLandscape ? s : s.Rotated()).With(PerformancePreset.Suggested(HostLimits.Current));
         var values = new Dictionary<string, string>(s.ConfigValues);

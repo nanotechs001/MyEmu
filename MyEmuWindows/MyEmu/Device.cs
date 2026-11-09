@@ -249,7 +249,7 @@ public static class DeviceSetup
     /// Boots the Play Store AVD read-only (nothing it does is kept) just long enough to copy its Google apps out.
     static async Task CopyPlayAppsAsync(string avd)
     {
-        var info = new System.Diagnostics.ProcessStartInfo(Engine.EmulatorExe) { UseShellExecute = false, CreateNoWindow = true };
+        var info = Engine.EmulatorStartInfo();
         foreach (var arg in new[] { "-avd", avd, "-read-only", "-no-window", "-gpu", "host", "-no-snapshot", "-no-boot-anim", "-port", ExtractionPort.ToString() })
             info.ArgumentList.Add(arg);
         using var process = System.Diagnostics.Process.Start(info)!;
