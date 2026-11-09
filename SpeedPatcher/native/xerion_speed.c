@@ -15,6 +15,7 @@
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/syscall.h>
@@ -205,21 +206,26 @@ static void patch_got(struct dl_phdr_info *info) {
     __android_log_print(ANDROID_LOG_INFO, TAG, "%d clock imports in %s", patched, info->dlpi_name);
 }
 
-static char own_dir[512];
+static char own_dir[512], data_dir[300];
 
-// The game's own libraries are the ones next to us (the app's native library folder).
+// The game's own libraries: the ones next to us (the app's native library folder) and the ones in
+// its data folder. Xerion downloads engine updates and loads them from <data>/app_myJNILibs, before
+// the APK's engine (which loads us), so a fresh install or a phone runs the downloaded engine.
 static int patch_game_library(struct dl_phdr_info *info, size_t size, void *data) {
     (void)size; (void)data;
     const char *name = info->dlpi_name;
     size_t dir = strlen(own_dir);
-    if (name && !strncmp(name, own_dir, dir) && !strchr(name + dir, '/') && !strstr(name, "libjnigraphicz.so"))
+    if (!name || strstr(name, "libjnigraphicz.so")) return 0;
+    if ((!strncmp(name, own_dir, dir) && !strchr(name + dir, '/')) || (data_dir[0] && strstr(name, data_dir)))
         patch_got(info);
     return 0;
 }
 
 static void JNICALL set_speed(JNIEnv *env, jclass cls, jdouble speed) {
     (void)env; (void)cls;
-    if (speed >= MIN_SPEED && speed <= MAX_SPEED) change_speed(speed);
+    if (speed < MIN_SPEED || speed > MAX_SPEED) return;
+    dl_iterate_phdr(patch_game_library, NULL); // libraries loaded since; patching twice is harmless
+    change_speed(speed);
 }
 
 static int failed(JNIEnv *env, const char *what) {
@@ -286,6 +292,14 @@ __attribute__((constructor)) static void load(void) {
         size_t dir = slash ? (size_t)(slash - self.dli_fname + 1) : 0;
         if (dir < sizeof own_dir) memcpy(own_dir, self.dli_fname, dir);
     }
+    // "/<package>/" matches the data folder (/data/user/0/<package>/...), not the APK's (<package>-xyz)
+    char package[256] = {0};
+    FILE *cmdline = fopen("/proc/self/cmdline", "r");
+    if (cmdline) {
+        fread(package, 1, sizeof package - 1, cmdline);
+        fclose(cmdline);
+    }
+    if (package[0]) snprintf(data_dir, sizeof data_dir, "/%s/", package);
     if (own_dir[0]) dl_iterate_phdr(patch_game_library, NULL);
     load_button();
 }
