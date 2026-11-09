@@ -132,6 +132,10 @@
                         <ComboBoxItem Content="OpenGL"/>
                     </ComboBox>
                     <TextBlock x:Name="RendererNote" Text="Vulkan ran Xerion at the same fps as OpenGL with about half the GPU. Use OpenGL only if a game draws incorrectly."/>
+                    <StackPanel x:Name="GpuPriorityPanel">
+                        <CheckBox x:Name="GpuPriorityBox" Content="GPU priority" Margin="0,6,0,0" Click="Option_Changed"/>
+                        <TextBlock Text="Runs MyEmu and Android on the dedicated GPU, ahead of other apps for GPU and CPU time, and keeps Windows from slowing them down to save power. The GPU choice applies when Android next starts."/>
+                    </StackPanel>
 
                     <TextBlock Style="{StaticResource Heading}" Text="Display"/>
                     <TextBlock x:Name="DisplayCurrent" Text="Available once Android has started."/>

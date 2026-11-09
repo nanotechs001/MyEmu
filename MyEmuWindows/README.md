@@ -164,7 +164,10 @@ Port the tests in `MyEmu/Tests/MyEmuTests/` with them; the AutoPots screenshot f
 
 ### Windows-only requirements from the user
 
-- **GPU priority toggle**, shown only when a dedicated GPU exists (DXGI adapters: non-software,
+- **GPU priority toggle** — done (`GpuPriority.cs`, Options → Renderer → GPU priority; checked: on = GPU
+  scheduling class High + CPU Above normal for MyEmu and qemu, 3 UserGpuPreferences values; off = Normal,
+  values removed). The engine's Vulkan already picks the discrete GPU on its own. Original request:
+  shown only when a dedicated GPU exists (DXGI adapters: non-software,
   dedicated VRAM; hybrid laptops count). Default ON. When on: register MyEmu + `emulator.exe`
   as "High performance" in `HKCU\Software\Microsoft\DirectX\UserGpuPreferences`, make the
   renderer pick that adapter (check `ANGLE_PREFERRED_DEVICE` / Vulkan device selection in phase 0),

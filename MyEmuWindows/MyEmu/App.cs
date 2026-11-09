@@ -12,6 +12,7 @@ public static class App
         var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown }; // last instance window closes it
         app.Startup += async (_, _) =>
         {
+            InstanceManager.RegisterF8();
             InstanceManager.Open(Instance.Main.Id);
             if (AndroidOptions.Shared.AiControl) await InstanceManager.SetAiControlAsync(true);
         };
@@ -35,6 +36,33 @@ public static class InstanceManager
 
     public static MainWindow? Window(string id) => windows.GetValueOrDefault(id);
 
+    // --- F8: starts/stops AutoPots from anywhere, as in the MuMu AutoPots app. A hotkey belongs to one
+    // window, so the app registers it once and sends it to the MyEmu window used last.
+
+    static MainWindow? lastActive;
+    static System.Windows.Interop.HwndSource? hotkeyWindow;
+    /// Another app (the MuMu AutoPots app?) has F8; the windows say so.
+    public static bool F8Taken { get; private set; }
+
+    public static void RegisterF8()
+    {
+        // a message-only window (parent HWND_MESSAGE): never shown, lives as long as the app
+        hotkeyWindow = new System.Windows.Interop.HwndSource(new System.Windows.Interop.HwndSourceParameters("MyEmu F8") { ParentWindow = -3 });
+        hotkeyWindow.AddHook((nint hwnd, int msg, nint w, nint l, ref bool handled) =>
+        {
+            if (msg == 0x0312 && w == HotkeyId) // WM_HOTKEY
+            {
+                (lastActive ?? windows.Values.FirstOrDefault())?.TogglePots();
+                handled = true;
+            }
+            return 0;
+        });
+        F8Taken = !RegisterHotKey(hotkeyWindow.Handle, HotkeyId, 0x4000 /* MOD_NOREPEAT */, 0x77 /* F8 */);
+    }
+
+    const int HotkeyId = 1;
+    [System.Runtime.InteropServices.DllImport("user32.dll")] static extern bool RegisterHotKey(nint hwnd, int id, uint modifiers, uint key);
+
     static McpInstanceState StoppedState(Instance i)
     {
         var device = DeviceSettings.Load(i.Id);
@@ -53,9 +81,11 @@ public static class InstanceManager
         if (List.Find(id) is not { } instance) return;
         var window = new MainWindow(instance);
         windows[id] = window;
+        window.Activated += (_, _) => lastActive = window;
         window.Closed += (_, _) =>
         {
             windows.Remove(id);
+            if (lastActive == window) lastActive = null;
             Changed?.Invoke();
             if (windows.Count == 0) Application.Current.Shutdown();
         };

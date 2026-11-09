@@ -33,6 +33,8 @@ public sealed class AndroidOptions
     /// Games' OpenGL ES runs as Vulkan (ANGLE in Android). Phase 0: same fps as OpenGL, ~half the GPU.
     /// Takes effect when Android next starts.
     public bool GuestAngle { get; set; } = true;
+    /// MyEmu and the engine on the dedicated GPU, ahead of other apps (GpuPriority; only with a dedicated GPU).
+    public bool GpuPriority { get; set; } = true;
     /// Game keys on (the mapping itself is per game, in keymaps\).
     public bool GameKeysEnabled { get; set; }
     /// The MCP endpoint for AI apps runs (Mac: AIControl, the launcher's "Allow AI control"). Off unless chosen.

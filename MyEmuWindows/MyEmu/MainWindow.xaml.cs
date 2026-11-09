@@ -60,7 +60,7 @@ public partial class MainWindow : Window
         gameKeys.OnLiveChange += WatchTyping;
         pots = new AutoPotsController(LiveFrame, FrameCopy, (x, y, down) => client?.Touch(PotionFingerId, x, y, down));
         pots.OnChange += () => { overlay?.Refresh(); ShowAutoPots(); };
-        SourceInitialized += (_, _) => RegisterF8();
+        if (InstanceManager.F8Taken) PotsMessage.Text = "F8 is taken by another app (the MuMu AutoPots app?); use the Start button.";
         Loaded += (_, _) =>
         {
             overlay = new KeymapOverlay(this, gameKeys, pots);
@@ -96,8 +96,10 @@ public partial class MainWindow : Window
             // the first start of a new PC, instance or profile
             AvdFiles.Ensure(avd, Instance.Main.Avd, profile == DeviceProfile.PlayStore ? null : profile.ImageConfig());
             var custom = profile == DeviceProfile.CustomModel;
+            GpuPriority.Apply(options.GpuPriority); // the GPU preference must be there before the engine starts
             engine = await Engine.StartAsync(avd, instance.GrpcPort, displayMaxFps, runningGuestAngle, cancel,
                 writableSystem: profile.NeedsWritableSystem(), phoneNumber: custom ? device.PhoneLine.PhoneNumber : "");
+            GpuPriority.Apply(options.GpuPriority); // and its process's priority, now that it runs
             if (custom) SetUpCustomModel(engine.Serial);
             ShowDevice();
             avdSettings = draft = AvdSettings.Read(avd);
@@ -610,23 +612,8 @@ public partial class MainWindow : Window
         });
     }
 
-    /// F8 starts/stops AutoPots from anywhere, as in the MuMu AutoPots app.
-    void RegisterF8()
-    {
-        var source = HwndSource.FromHwnd(new WindowInteropHelper(this).Handle);
-        source.AddHook((nint hwnd, int msg, nint w, nint l, ref bool handled) =>
-        {
-            if (msg == 0x0312 && w == HotkeyId) { pots.Toggle(); handled = true; } // WM_HOTKEY
-            return 0;
-        });
-        if (!RegisterHotKey(source.Handle, HotkeyId, 0x4000 /* MOD_NOREPEAT */, 0x77 /* F8 */))
-            PotsMessage.Text = "F8 is taken by another app (the MuMu AutoPots app?); use the Start button.";
-        Closed += (_, _) => UnregisterHotKey(source.Handle, HotkeyId);
-    }
-
-    const int HotkeyId = 1;
-    [DllImport("user32.dll")] static extern bool RegisterHotKey(nint hwnd, int id, uint modifiers, uint key);
-    [DllImport("user32.dll")] static extern bool UnregisterHotKey(nint hwnd, int id);
+    /// F8 (InstanceManager.RegisterF8), sent to the MyEmu window used last.
+    internal void TogglePots() => pots.Toggle();
 
     // --- Game keys UI
 
@@ -742,6 +729,8 @@ public partial class MainWindow : Window
         LightweightBox.IsChecked = options.Lightweight;
         KeyboardOnlyBox.IsChecked = options.KeyboardOnly;
         RendererBox.SelectedIndex = options.GuestAngle ? 0 : 1;
+        GpuPriorityPanel.Visibility = GpuPriority.HasDedicatedGpu ? Visibility.Visible : Visibility.Collapsed;
+        GpuPriorityBox.IsChecked = options.GpuPriority;
         UpdateOptionNotes();
         loadingOptions = false;
     }
@@ -756,7 +745,10 @@ public partial class MainWindow : Window
         options.Lightweight = LightweightBox.IsChecked == true;
         options.KeyboardOnly = KeyboardOnlyBox.IsChecked == true;
         options.GuestAngle = RendererBox.SelectedIndex == 0;
+        var gpuPriorityChanged = options.GpuPriority != (GpuPriorityBox.IsChecked == true);
+        options.GpuPriority = GpuPriorityBox.IsChecked == true;
         options.Save();
+        if (gpuPriorityChanged) GpuPriority.Apply(options.GpuPriority); // app-wide: every instance's engine
         UpdateOptionNotes();
         ShowDisplay(); // a renderer change shows Apply & Restart
         ApplyOptions();
