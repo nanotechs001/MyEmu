@@ -31,9 +31,6 @@ import java.util.zip.ZipOutputStream;
  */
 public final class XerionPatch {
     public static final String GAME = "com.com.Xerion";
-    /** The separate copy's package and name: installs beside the original Xerion. */
-    public static final String COPY = "com.com.Xerion.speed";
-    static final String COPY_LABEL = "Xerion Speed";
     static final String ENGINE = "libCQ2ClientEn.so";
     static final String SPEED_LIB = "libjnigraphicz.so";
     private static final byte[] FROM = "libjnigraphics.so\0".getBytes(StandardCharsets.US_ASCII);
@@ -45,11 +42,11 @@ public final class XerionPatch {
 
     private XerionPatch() {}
 
-    /** @param copy true: a separate app (COPY) beside the original; false: a replacement for Xerion. */
-    public static void build(File source, File out, boolean copy, Files files, Progress progress) throws Exception {
+    /** The patched Xerion keeps the game's package name: it replaces Xerion, which isn't then flagged as a clone. */
+    public static void build(File source, File out, Files files, Progress progress) throws Exception {
         File unsigned = new File(out.getPath() + ".unsigned");
         try {
-            rewrite(source, unsigned, copy, files, progress);
+            rewrite(source, unsigned, files, progress);
             progress.update("Signing the patched Xerion…");
             sign(unsigned, out, files);
         } finally {
@@ -63,7 +60,25 @@ public final class XerionPatch {
         }
     }
 
-    private static void rewrite(File source, File out, boolean copy, Files files, Progress progress) throws IOException {
+    /** True when apk carries this patcher's speed library; false for an older patcher's (or none). */
+    public static boolean isCurrent(File apk, Files files) throws IOException {
+        boolean any = false;
+        try (ZipFile zip = new ZipFile(apk)) {
+            for (ZipEntry entry : Collections.list(zip.entries())) {
+                String name = entry.getName();
+                if (!name.startsWith("lib/") || !name.endsWith("/" + SPEED_LIB)) continue;
+                CRC32 crc = new CRC32();
+                try (InputStream lib = files.open("speed-" + name.substring(4, name.lastIndexOf('/')) + ".so")) {
+                    crc.update(read(lib));
+                }
+                if (crc.getValue() != entry.getCrc()) return false;
+                any = true;
+            }
+        }
+        return any;
+    }
+
+    private static void rewrite(File source, File out, Files files, Progress progress) throws IOException {
         Set<String> abis = new TreeSet<>();
         byte[] buffer = new byte[1 << 16];
         try (ZipFile in = new ZipFile(source);
@@ -80,14 +95,6 @@ public final class XerionPatch {
                     byte[] engine = new byte[(int) entry.getSize()]; // 68 MB: exactly once, not a growing buffer
                     try (DataInputStream data = new DataInputStream(in.getInputStream(entry))) { data.readFully(engine); }
                     put(zip, name, patchEngine(engine, name), entry.getMethod());
-                    continue;
-                }
-                if (copy && name.equals("AndroidManifest.xml")) {
-                    put(zip, name, AxmlRename.rename(read(in.getInputStream(entry)), GAME, COPY, COPY_LABEL), entry.getMethod());
-                    continue;
-                }
-                if (copy && name.equals("resources.arsc")) {
-                    put(zip, name, AxmlRename.renameResources(read(in.getInputStream(entry)), GAME, COPY), entry.getMethod());
                     continue;
                 }
                 ZipEntry same = new ZipEntry(name);
@@ -120,7 +127,7 @@ public final class XerionPatch {
             if (at >= 0) at = -2;
             if (at == -1) at = i;
         }
-        if (at == -1 && contains(engine, TO)) return engine; // already patched (a copy made from the replaced Xerion)
+        if (at == -1 && contains(engine, TO)) return engine; // already patched (updating a patched Xerion's speed library)
         if (at < 0) throw new IOException("This Xerion version's engine (" + name + ") isn't one the patcher knows.");
         System.arraycopy(TO, 0, engine, at, TO.length);
         return engine;

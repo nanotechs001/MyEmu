@@ -25,16 +25,17 @@ import java.io.InputStream;
 import java.io.OutputStream;
 
 /**
- * One screen with two ways to add the speed button to Xerion:
- *  - a separate copy ("Xerion Speed", its own package) installed beside the original, or
- *  - a replacement: uninstall the original (Android won't replace an app signed by someone else),
- *    then install the patched one.
+ * One screen that adds the speed button to Xerion itself: uninstall the original (Android won't
+ * replace an app signed by someone else), then install the patched one, which keeps the game's
+ * package name. Also updates an older patch in place and removes an older version's speed copy.
  */
 public final class MainActivity extends Activity {
     private static final String INSTALLED = "com.myemu.speedpatcher.INSTALLED";
+    /** An older version's separate copy, which the game flags as a clone. */
+    private static final String OLD_COPY = "com.com.Xerion.speed";
     private TextView status;
     private Button primary, secondary;
-    private File patched, copyApk, installing;
+    private File patched, installing;
     private boolean busy;
 
     @Override
@@ -57,8 +58,8 @@ public final class MainActivity extends Activity {
         root.addView(primary);
         root.addView(secondary);
         setContentView(root);
+        new File(getExternalFilesDir(null), "xerion-speed-copy.apk").delete(); // an older version's speed copy
         patched = new File(getExternalFilesDir(null), "xerion-speed.apk");
-        copyApk = new File(getExternalFilesDir(null), "xerion-speed-copy.apk");
         // The uninstall dialog closes (and we resume) before the app is actually gone.
         IntentFilter changes = new IntentFilter(Intent.ACTION_PACKAGE_REMOVED);
         changes.addAction(Intent.ACTION_PACKAGE_ADDED);
@@ -105,19 +106,16 @@ public final class MainActivity extends Activity {
 
     private void refresh() {
         if (busy) return;
-        ApplicationInfo game = info(XerionPatch.GAME), copy = info(XerionPatch.COPY);
+        ApplicationInfo game = info(XerionPatch.GAME);
         boolean ours = game != null
             && getPackageManager().checkSignatures(XerionPatch.GAME, getPackageName()) == PackageManager.SIGNATURE_MATCH;
-        if (ours) patched.delete();
+        if (ours && patched.exists() && current(game)) patched.delete(); // installed while we were away
+        boolean oldCopy = info(OLD_COPY) != null;
 
-        if (copyApk.exists()) {
-            show("The speed copy is ready to install. The original Xerion stays as it is.",
-                "Install speed copy", v -> install(copyApk), null, null);
-        } else if (patched.exists() && game != null) {
+        if (patched.exists() && game != null && !ours) {
             show("The patched Xerion is ready. Android only replaces an app with one signed by the same developer, so the original Xerion "
                 + "has to be uninstalled first. This clears the game's data on this device (your account stays on the game's server).",
-                "Uninstall original Xerion", v -> startActivity(new Intent(Intent.ACTION_DELETE, Uri.parse("package:" + XerionPatch.GAME))),
-                null, null);
+                "Uninstall original Xerion", v -> uninstall(XerionPatch.GAME), null, null);
         } else if (patched.exists()) {
             show("The patched Xerion is ready to install.", "Install patched Xerion", v -> install(patched), null, null);
         } else if (game == null) {
@@ -126,24 +124,32 @@ public final class MainActivity extends Activity {
             show("This Xerion is installed in several parts (split APKs), which the patcher can't rebuild yet.", null, null, null, null);
         } else {
             File source = new File(game.sourceDir);
-            boolean outdated = copy != null && version(XerionPatch.COPY) < version(XerionPatch.GAME);
-            StringBuilder text = new StringBuilder(ours
-                ? "Xerion has the speed button: tap it in the game to change speed (1× → 1.5× → … → 5× → 1×), drag it to move it."
-                : "Xerion found.");
-            if (copy == null) {
-                text.append("\n\nMake a speed copy: a second app, \"Xerion Speed\", installed next to Xerion, which stays as it is. "
-                    + "The copy downloads the game's data again.");
-                if (!ours) text.append("\n\nOr replace Xerion with the speed version: the original is uninstalled first.");
-            } else if (outdated) {
-                text.append("\n\nXerion was updated: update the speed copy to match.");
-            } else {
-                text.append("\n\nThe speed copy (\"Xerion Speed\") is installed.");
-            }
-            text.append("\n\nPatching needs about ").append(source.length() * 2 >> 20).append(" MB free.");
-            String first = copy == null ? "Make a speed copy" : outdated ? "Update speed copy" : "Open speed copy";
-            View.OnClickListener firstAction = copy != null && !outdated ? v -> open(XerionPatch.COPY) : v -> patch(source, true);
-            if (ours) show(text.toString(), first, firstAction, "Open Xerion", v -> open(XerionPatch.GAME));
-            else show(text.toString(), first, firstAction, "Replace Xerion", v -> patch(source, false));
+            boolean stale = ours && !current(game);
+            String text = !ours
+                ? "Xerion found.\n\nPatch Xerion to add the speed button. The original is uninstalled first, which clears the game's "
+                    + "data on this device (your account stays on the game's server), then the game downloads its data again."
+                : stale ? "Xerion's speed patch is out of date: update it (your game data stays)."
+                : "Xerion has the speed button: tap it in the game to change speed (1× → 1.5× → … → 5× → 1×), drag it to move it.";
+            if (oldCopy) text += "\n\nThe old \"Xerion Speed\" copy is still installed: the game flags it as a clone, so remove it.";
+            text += "\n\nPatching needs about " + (source.length() * 2 >> 20) + " MB free.";
+            String second = oldCopy ? "Remove old speed copy" : null;
+            View.OnClickListener removeCopy = v -> uninstall(OLD_COPY);
+            if (!ours) show(text, "Patch Xerion", v -> patch(source), second, removeCopy);
+            else if (stale) show(text, "Update speed patch", v -> patch(source), second, removeCopy);
+            else show(text, "Open Xerion", v -> open(XerionPatch.GAME), second, removeCopy);
+        }
+    }
+
+    private void uninstall(String app) {
+        startActivity(new Intent(Intent.ACTION_DELETE, Uri.parse("package:" + app)));
+    }
+
+    // Built by this version of the patcher? (An older one's speed library needs replacing.)
+    private boolean current(ApplicationInfo app) {
+        try {
+            return XerionPatch.isCurrent(new File(app.sourceDir), getAssets()::open);
+        } catch (Exception e) {
+            return true; // can't tell: don't nag
         }
     }
 
@@ -191,8 +197,8 @@ public final class MainActivity extends Activity {
         });
     }
 
-    private void patch(File source, boolean copy) {
-        File target = copy ? copyApk : patched;
+    private void patch(File source) {
+        File target = patched;
         File folder = target.getParentFile();
         if (folder.getUsableSpace() < source.length() * 2) {
             show("Not enough free space: the patcher needs about " + (source.length() * 2 >> 20) + " MB.",
@@ -203,7 +209,7 @@ public final class MainActivity extends Activity {
         new Thread(() -> {
             File building = new File(folder, "building.apk");
             try {
-                XerionPatch.build(source, building, copy, getAssets()::open, this::working);
+                XerionPatch.build(source, building, getAssets()::open, this::working);
                 if (!building.renameTo(target)) throw new java.io.IOException("couldn't save the patched Xerion");
                 runOnUiThread(() -> { busy = false; refresh(); });
             } catch (Throwable e) { // out of memory included
