@@ -60,8 +60,20 @@ Status (2026-11-08, branch `windows-autopots`):
     Options are app-wide (a change applies to every window); MCP addresses every instance. Checked: a
     second instance ran beside instance 1 (emulator-5556), was stopped, cloned (2.2 GB, ~5 s), the copy
     started over MCP, both deleted. ponytail: F8 (AutoPots) registers for the first window only.
-  - Not yet: device settings/spoofing and game speed (both need the Custom-model profile: Google's
-    `google_apis` x86_64 Android 15 image, ~1.5 GB, not downloaded here), installer.
+  - Device (port of `DeviceProfile`/`DeviceDrawer`/the identity + Play Store parts of `Engine+Device`):
+    per-instance `%LOCALAPPDATA%\MyEmu\device\<id>.json` (profile, identity, phoneLine — the Mac's JSON).
+    Custom model = AVD `myemu-custom[-n]` on Google's `google_apis` x86_64 Android 15 image (r09, SHA-1
+    `0103e6dab21290c4b9d16550a3ce99476f884eef`, unpacked into `Sdk\system-images\android-35\google_apis\x86_64`;
+    the installer must bundle it), booted `-writable-system` (+ `-phone-number`). After boot: Google's Play apps
+    copied once from the Play Store AVD (read-only boot on port 5680), then the model written into the
+    build.props (one reboot each), then the Settings name. **Windows difference:** the x86_64 image's
+    writable-system overlay is only ~80 MB (its spare super space), the Play apps ~320 MB, so they're stored
+    in `/data/myemu-play` (labelled `apk_data_file`) with symlinks at the `/product`/`/system_ext` paths —
+    Android scans them as privileged system apps. Checked: fresh Custom model → Galaxy S24 Ultra
+    (samsung/SM-S928B, About shows the name), Google Play opens to sign-in, ~105 s; back to Play Store keeps Xerion.
+  - Not yet: IMEI (the Mac patches arm64 code in the radio library and injects into the engine; the x86_64
+    image needs its own patch), game speed (`libmyemuspeed.so` hooks the arm64 game's clock; under
+    ndk_translation an x86_64 hook may not see it — needs a test), installer.
 The Mac app in `MyEmu/` is Swift/AppKit/Metal and cannot be compiled for Windows — the Windows
 version is a new native app that reuses MyEmu's file formats, engine commands and test fixtures.
 

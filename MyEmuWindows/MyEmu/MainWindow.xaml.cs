@@ -12,7 +12,10 @@ public partial class MainWindow : Window
     const int KeyBack = 158, KeyHome = 172, KeyRecents = 580; // Linux evdev codes
 
     readonly Instance instance;
-    readonly string avd;
+    string avd; // the running profile's AVD
+    DeviceSettings device, deviceDraft; // this instance's profile, model and phone line, and the panel's edits
+    string? notice; // shown after the fps in the status line (Custom-model setup)
+    CancellationTokenSource? deviceSetup;
     CancellationTokenSource running = new(); // one per engine run: replaced on restart
     Task engineTask = Task.CompletedTask;
     bool restarting;
@@ -43,8 +46,10 @@ public partial class MainWindow : Window
     public MainWindow(Instance instance)
     {
         this.instance = instance;
-        avd = instance.Avd;
+        device = deviceDraft = DeviceSettings.Load(instance.Id);
+        avd = instance.Avd(device.Profile);
         InitializeComponent();
+        ShowDevice();
         Title = $"MyEmu · {instance.Name}";
         InstanceManager.Changed += ShowInstances;
         InstanceManager.OptionsChanged += OtherWindowChangedOptions;
@@ -86,8 +91,15 @@ public partial class MainWindow : Window
             displayMaxFps = RefreshRate();
             Status.Text = $"Starting {avd}...";
             runningGuestAngle = options.GuestAngle;
-            if (instance.Number > 1) AvdFiles.Ensure(avd, Instance.Main.Avd); // a new instance's first start
-            engine = await Engine.StartAsync(avd, instance.GrpcPort, displayMaxFps, runningGuestAngle, cancel);
+            var profile = device.Profile;
+            avd = instance.Avd(profile);
+            if (instance.Number > 1 || profile != DeviceProfile.PlayStore) // a new instance's or profile's first start
+                AvdFiles.Ensure(avd, Instance.Main.Avd, profile == DeviceProfile.PlayStore ? null : profile.ImageConfig());
+            var custom = profile == DeviceProfile.CustomModel;
+            engine = await Engine.StartAsync(avd, instance.GrpcPort, displayMaxFps, runningGuestAngle, cancel,
+                writableSystem: profile.NeedsWritableSystem(), phoneNumber: custom ? device.PhoneLine.PhoneNumber : "");
+            if (custom) SetUpCustomModel(engine.Serial);
+            ShowDevice();
             avdSettings = draft = AvdSettings.Read(avd);
             client = new EmulatorClient(engine.Port, engine.Token);
             frames = new FrameBuffer(engine.Size.Width * engine.Size.Height * 4);
@@ -155,6 +167,7 @@ public partial class MainWindow : Window
         await Engine.StopAsync(old); // the same AVD can't run twice
         await engineTask;
         frameWidth = frameHeight = 0; // AutoPots reads no frames now
+        notice = null;
         client?.Dispose();
         frames?.Dispose();
         (client, frames, engine) = (null, null, null);
@@ -165,6 +178,109 @@ public partial class MainWindow : Window
         if (stopping) return; // the window is closing
         running = new CancellationTokenSource();
         engineTask = StartAsync();
+    }
+
+    // --- Device: profile, model and phone line (Mac: DeviceDrawer, EmulatorModel.applyIdentity/applyDeviceDraft)
+
+    /// The custom-model image has no Play Store and reports Google's SDK phone: add Google's Play apps, then
+    /// write the model (Android reboots once for each change), then the Settings name.
+    void SetUpCustomModel(string serial)
+    {
+        deviceSetup?.Cancel();
+        var cancel = deviceSetup = CancellationTokenSource.CreateLinkedTokenSource(running.Token);
+        var identity = device.Identity;
+        _ = Task.Run(async () =>
+        {
+            void Say(string? text) => Dispatcher.BeginInvoke(() => { if (!cancel.IsCancellationRequested) notice = text; });
+            try
+            {
+                Say("Checking Google Play Store…");
+                if (await DeviceSetup.EnsurePlayStoreAsync(serial, instance.Avd(DeviceProfile.PlayStore))) Say("Google Play Store added");
+                if (cancel.IsCancellationRequested) return;
+                Say("Setting device model…");
+                if (await DeviceSetup.ApplyIdentityAsync(identity, serial)) Say("Restarted with the new model");
+                await DeviceSetup.SetDeviceNameAsync(identity.MarketName, serial);
+                Say(null);
+            }
+            catch (Exception e) when (!cancel.IsCancellationRequested) { Say($"Device setup failed: {e.Message}"); }
+            catch { } // Android stopped meanwhile
+        });
+    }
+
+    void ShowDevice()
+    {
+        var wasLoading = loadingOptions;
+        loadingOptions = true;
+        var d = deviceDraft;
+        DeviceCurrent.Text = device.Profile == DeviceProfile.PlayStore ? "Now: Play Store · Google SDK phone"
+            : $"Now: Custom model · {device.Identity.MarketName} ({device.Identity.Model})";
+        ProfileBox.SelectedIndex = d.Profile == DeviceProfile.PlayStore ? 0 : 1;
+        ProfileNote.Text = d.Profile == DeviceProfile.PlayStore
+            ? "Google Play works here, but Google locks this image, so the device model can't change."
+            : "Pick the phone Android reports to games. Google Play Store is added automatically. Its apps and sign-in are separate from the Play Store profile.";
+        CustomModelPanel.Visibility = d.Profile == DeviceProfile.CustomModel ? Visibility.Visible : Visibility.Collapsed;
+        if (ModelBox.Items.Count == 0)
+        {
+            ModelBox.Items.Add(new ComboBoxItem { Content = "Google SDK phone (stock)", Tag = DeviceIdentity.Stock });
+            foreach (var preset in DeviceIdentity.Presets) ModelBox.Items.Add(new ComboBoxItem { Content = $"{preset.MarketName} · {preset.Model}", Tag = preset });
+            ModelBox.Items.Add(new ComboBoxItem { Content = "Custom" });
+        }
+        ModelBox.SelectedItem = ModelBox.Items.Cast<ComboBoxItem>().FirstOrDefault(i => Equals(i.Tag, d.Identity)) ?? ModelBox.Items[^1];
+        foreach (var (box, value) in new[] { (MarketNameBox, d.Identity.MarketName), (BrandBox, d.Identity.Brand), (MakerBox, d.Identity.Manufacturer),
+                     (ModelNameBox, d.Identity.Model), (PhoneBox, d.PhoneLine.PhoneNumber) })
+            if (!box.IsKeyboardFocused) box.Text = value;
+
+        var profileChanged = d.Profile != device.Profile;
+        var custom = d.Profile == DeviceProfile.CustomModel;
+        var identityChanged = custom && d.Identity != device.Identity;
+        var phoneChanged = custom && d.PhoneLine != device.PhoneLine;
+        DeviceApplyBox.Visibility = profileChanged || identityChanged || phoneChanged ? Visibility.Visible : Visibility.Collapsed;
+        var problem = custom ? d.Identity.Problem ?? d.PhoneLine.Problem : null;
+        DeviceApplyNote.Text = problem ?? (profileChanged
+            ? $"Android restarts in the {d.Profile.Title()} profile. The first switch to Custom model sets up its Android (a few minutes)."
+            : phoneChanged ? "Android restarts to apply the new phone number." : "Android restarts once to load the new model.");
+        DeviceApplyNote.Foreground = problem != null ? System.Windows.Media.Brushes.IndianRed : System.Windows.Media.Brushes.LightGray;
+        DeviceApplyButton.Content = profileChanged || phoneChanged ? "Apply & Restart" : "Apply";
+        DeviceApplyButton.IsEnabled = problem == null && !restarting && engine != null;
+        loadingOptions = wasLoading;
+    }
+
+    void Device_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (loadingOptions) return;
+        if (sender == ProfileBox) deviceDraft = deviceDraft with { Profile = ProfileBox.SelectedIndex == 1 ? DeviceProfile.CustomModel : DeviceProfile.PlayStore };
+        else if (ModelBox.SelectedItem is ComboBoxItem { Tag: DeviceIdentity preset }) deviceDraft = deviceDraft with { Identity = preset };
+        ShowDevice();
+    }
+
+    void DeviceText_Changed(object sender, RoutedEventArgs e)
+    {
+        if (loadingOptions) return;
+        deviceDraft = deviceDraft with
+        {
+            Identity = new DeviceIdentity(BrandBox.Text.Trim(), MakerBox.Text.Trim(), ModelNameBox.Text.Trim(), MarketNameBox.Text.Trim()),
+            PhoneLine = deviceDraft.PhoneLine with { PhoneNumber = PhoneBox.Text.Trim() },
+        };
+        ShowDevice();
+    }
+
+    async void DeviceApply_Click(object sender, RoutedEventArgs e)
+    {
+        var old = device;
+        device = deviceDraft;
+        device.Save(instance.Id);
+        ShowDevice();
+        // A new profile is the other AVD, and the engine sets the phone number as it starts: restart. A new
+        // model on the running custom profile is written live (Android reboots once).
+        if (device.Profile != old.Profile || device.Profile == DeviceProfile.CustomModel && device.PhoneLine != old.PhoneLine)
+            await RestartAndroidAsync();
+        else if (device.Profile == DeviceProfile.CustomModel && engine is { } e2) SetUpCustomModel(e2.Serial);
+    }
+
+    void DeviceRevert_Click(object sender, RoutedEventArgs e)
+    {
+        deviceDraft = device;
+        ShowDevice();
     }
 
     // --- MCP hooks (InstanceManager's AI control calls these on the UI thread)
@@ -746,7 +862,8 @@ public partial class MainWindow : Window
     {
         if (frameWidth == 0 || stopping) return;
         var received = Interlocked.Read(ref frameCount);
-        Status.Text = $"{avd} · {frameWidth}×{frameHeight} · {(received - fpsReceived) / fpsClock.Elapsed.TotalSeconds:0} fps";
+        Status.Text = $"{avd} · {frameWidth}×{frameHeight} · {(received - fpsReceived) / fpsClock.Elapsed.TotalSeconds:0} fps"
+            + (notice != null ? $" · {notice}" : "");
         fpsReceived = received;
         fpsClock.Restart();
     }

@@ -93,14 +93,16 @@ public static class AvdFiles
 
     /// Creates `avd` the first time from `templateAvd`'s config (same image), in landscape with
     /// CPU and memory suggested for this PC. Android's data starts fresh on its first boot.
-    public static void Ensure(string avd, string templateAvd)
+    public static void Ensure(string avd, string templateAvd, IReadOnlyDictionary<string, string>? imageConfig = null)
     {
         if (Exists(avd)) return;
         Directory.CreateDirectory(Dir(avd));
         var config = File.ReadAllText(Path.Combine(Dir(templateAvd), "config.ini"));
         var s = AvdSettings.FromConfig(Ini.Parse(config));
         s = (s.IsLandscape ? s : s.Rotated()).With(PerformancePreset.Suggested(HostLimits.Current));
-        File.WriteAllText(Path.Combine(Dir(avd), "config.ini"), Ini.Update(config, s.ConfigValues));
+        var values = new Dictionary<string, string>(s.ConfigValues);
+        foreach (var (key, value) in imageConfig ?? new Dictionary<string, string>()) values[key] = value; // the profile's image
+        File.WriteAllText(Path.Combine(Dir(avd), "config.ini"), Ini.Update(config, values));
         WriteIni(avd);
     }
 

@@ -1,3 +1,4 @@
+using System.IO;
 using System.Windows;
 
 namespace MyEmu;
@@ -68,17 +69,25 @@ public static class InstanceManager
     public static async Task<Instance?> CloneAsync(string id)
     {
         if (Busy != null || List.Find(id) is not { } source || windows.ContainsKey(id) || !List.CanAdd) return null;
-        var target = new Instance("", "", List.Instances.Max(i => i.Number) + 1).Avd; // the number Add gives next
+        var target = new Instance("", "", List.Instances.Max(i => i.Number) + 1); // the number Add gives next
         Busy = $"Copying {source.Name}…";
         Changed?.Invoke();
+        var targets = Enum.GetValues<DeviceProfile>().Select(p => (Source: source.Avd(p), Target: target.Avd(p))).ToList();
+        var leftOver = targets.Where(t => AvdFiles.Exists(t.Target) || Directory.Exists(Path.Combine(AvdFiles.Root, $"{t.Target}.avd"))).ToList();
         try
         {
-            await AvdFiles.CloneAsync(source.Avd, target);
+            if (leftOver.Count > 0) throw new IOException($"{leftOver[0].Target} already exists in {AvdFiles.Root}; move it away first.");
+            foreach (var (from, to) in targets) await AvdFiles.CloneAsync(from, to); // both Androids (an unused one is skipped)
             var copy = List.Add($"{source.Name} copy")!;
+            DeviceSettings.Load(source.Id).Save(copy.Id);
             List.Save();
             return copy;
         }
-        catch { AvdFiles.Delete(target); throw; } // only what this clone made
+        catch when (leftOver.Count == 0)
+        {
+            foreach (var (_, to) in targets) AvdFiles.Delete(to); // only what this clone made (none existed before)
+            throw;
+        }
         finally
         {
             Busy = null;
@@ -98,7 +107,8 @@ public static class InstanceManager
     public static void Delete(string id)
     {
         if (Busy != null || List.Find(id) is not { Number: > 1 } instance || windows.ContainsKey(id)) return;
-        AvdFiles.Delete(instance.Avd);
+        foreach (var profile in Enum.GetValues<DeviceProfile>()) AvdFiles.Delete(instance.Avd(profile));
+        File.Delete(DeviceSettings.FilePath(id));
         List.Remove(id);
         List.Save();
         Changed?.Invoke();

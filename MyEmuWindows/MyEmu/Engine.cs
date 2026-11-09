@@ -27,20 +27,25 @@ public static class Engine
     public static string ConfigPath(string avd) => Path.Combine(Home, ".android", "avd", $"{avd}.avd", "config.ini");
 
     /// Same flags as the Mac app. Guest ANGLE (Vulkan) vs OpenGL made no fps difference in phase 0.
-    public static List<string> Arguments(string avd, int port, int refreshRate, bool guestAngle = false) =>
+    /// writableSystem: the custom-model profile's root writes; phoneNumber: its SIM number (empty = default).
+    public static List<string> Arguments(string avd, int port, int refreshRate, bool guestAngle = false,
+        bool writableSystem = false, string phoneNumber = "") =>
     [
         "-avd", avd, "-no-window", "-gpu", "host",
         "-feature", guestAngle ? "GuestAngle" : "-GuestAngle",
         "-grpc", port.ToString(), "-grpc-use-token",
         "-vsync-rate", refreshRate.ToString(),
         "-no-boot-anim", "-no-snapshot-save",
+        .. writableSystem ? ["-writable-system"] : Array.Empty<string>(),
+        .. phoneNumber.Length > 0 ? ["-phone-number", phoneNumber] : Array.Empty<string>(),
     ];
 
     /// No named device profile (it re-adds a fake camera hole) and the ASG shared-memory graphics transport.
     public static readonly IReadOnlyDictionary<string, string> EnforcedConfig =
         new Dictionary<string, string> { ["hw.device.name"] = "", ["hw.gltransport"] = "asg" };
 
-    public static async Task<EngineInstance> StartAsync(string avd, int port, int refreshRate, bool guestAngle, CancellationToken cancel = default)
+    public static async Task<EngineInstance> StartAsync(string avd, int port, int refreshRate, bool guestAngle, CancellationToken cancel = default,
+        bool writableSystem = false, string phoneNumber = "")
     {
         if (!File.Exists(EmulatorExe)) throw new FileNotFoundException($"Emulator engine not found at {EmulatorExe}.");
         var configPath = ConfigPath(avd);
@@ -60,7 +65,7 @@ public static class Engine
             UseShellExecute = false, CreateNoWindow = true,
             RedirectStandardOutput = true, RedirectStandardError = true, RedirectStandardInput = true,
         };
-        foreach (var arg in Arguments(avd, port, refreshRate, guestAngle)) info.ArgumentList.Add(arg);
+        foreach (var arg in Arguments(avd, port, refreshRate, guestAngle, writableSystem, phoneNumber)) info.ArgumentList.Add(arg);
         var launchedAt = DateTime.Now.AddSeconds(-1); // file times are coarse
         var process = Process.Start(info)!;
         process.StandardInput.Close(); // the engine must not read ours
@@ -137,9 +142,10 @@ public static class Engine
         var output = process.StandardOutput.ReadToEndAsync();
         var error = process.StandardError.ReadToEndAsync();
         await process.WaitForExitAsync();
-        var text = await output + await error;
-        if (process.ExitCode != 0)
-            throw new InvalidOperationException(text.Split('\n', StringSplitOptions.RemoveEmptyEntries).LastOrDefault()?.Trim() ?? $"adb exited with code {process.ExitCode}.");
-        return text;
+        var (stdout, stderr) = (await output, await error);
+        if (process.ExitCode != 0) // adb's own message ("adb: error: …") is on stderr; a push's progress line is on stdout
+            throw new InvalidOperationException((stderr.Length > 0 ? stderr : stdout).Split('\n', StringSplitOptions.RemoveEmptyEntries).LastOrDefault()?.Trim()
+                ?? $"adb exited with code {process.ExitCode}.");
+        return stdout + stderr;
     }
 }
