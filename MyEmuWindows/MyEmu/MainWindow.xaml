@@ -162,14 +162,19 @@
                         <ComboBox x:Name="ModelBox" Margin="0,6,0,0" SelectionChanged="Device_Changed"/>
                         <Grid Margin="0,4,0,0">
                             <Grid.ColumnDefinitions><ColumnDefinition Width="50"/><ColumnDefinition/></Grid.ColumnDefinitions>
-                            <Grid.RowDefinitions><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/></Grid.RowDefinitions>
+                            <Grid.RowDefinitions><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/></Grid.RowDefinitions>
                             <TextBlock Text="Name" Margin="0,3,0,0"/><TextBox x:Name="MarketNameBox" Grid.Column="1" Margin="0,1" LostFocus="DeviceText_Changed" KeyDown="Number_KeyDown"/>
                             <TextBlock Grid.Row="1" Text="Brand" Margin="0,3,0,0"/><TextBox x:Name="BrandBox" Grid.Row="1" Grid.Column="1" Margin="0,1" LostFocus="DeviceText_Changed" KeyDown="Number_KeyDown"/>
                             <TextBlock Grid.Row="2" Text="Maker" Margin="0,3,0,0"/><TextBox x:Name="MakerBox" Grid.Row="2" Grid.Column="1" Margin="0,1" LostFocus="DeviceText_Changed" KeyDown="Number_KeyDown"/>
                             <TextBlock Grid.Row="3" Text="Model" Margin="0,3,0,0"/><TextBox x:Name="ModelNameBox" Grid.Row="3" Grid.Column="1" Margin="0,1" LostFocus="DeviceText_Changed" KeyDown="Number_KeyDown"/>
                             <TextBlock Grid.Row="4" Text="Phone" Margin="0,3,0,0"/><TextBox x:Name="PhoneBox" Grid.Row="4" Grid.Column="1" Margin="0,1" LostFocus="DeviceText_Changed" KeyDown="Number_KeyDown"/>
+                            <TextBlock Grid.Row="5" Text="IMEI" Margin="0,3,0,0"/>
+                            <DockPanel Grid.Row="5" Grid.Column="1" Margin="0,1">
+                                <Button DockPanel.Dock="Right" Content="Random" Margin="4,0,0,0" Padding="6,0" Focusable="False" Click="RandomImei_Click" ToolTip="A random valid IMEI"/>
+                                <TextBox x:Name="ImeiBox" LostFocus="DeviceText_Changed" KeyDown="Number_KeyDown"/>
+                            </DockPanel>
                         </Grid>
-                        <TextBlock Text="Apps read these as the phone's name, Build.BRAND, Build.MANUFACTURER and Build.MODEL. Phone: the SIM's number, empty for the default."/>
+                        <TextBlock Text="Apps read these as the phone's name, Build.BRAND, Build.MANUFACTURER and Build.MODEL. Phone: the SIM's number; IMEI: shown in About phone. Empty for the defaults."/>
                     </StackPanel>
                     <Border x:Name="DeviceApplyBox" Background="#1e293b" Padding="8" Margin="0,8,0,0" Visibility="Collapsed">
                         <StackPanel>

@@ -31,6 +31,27 @@ public class DeviceTests
     }
 
     [Fact]
+    public void ImeisAreCheckedAndPatchedIntoTheRadioLibrary()
+    {
+        Assert.Null(new PhoneLine(Imei: "356938035643809").Problem); // a known Luhn-valid IMEI
+        Assert.Null(new PhoneLine(Imei: "867400022047199").Problem); // Android's own default
+        Assert.NotNull(new PhoneLine(Imei: "356938035643808").Problem); // wrong checksum
+        Assert.NotNull(new PhoneLine(Imei: "35693803564380").Problem); // 14 digits
+        for (var i = 0; i < 20; i++) Assert.Null(new PhoneLine(Imei: PhoneLine.RandomImei()).Problem);
+
+        // getImei's three moves as the x86_64 library has them, between other code.
+        byte[] stock = [0x90, 0xc7, 0x44, 0x24, 0x78, .. "8674"u8, 0xc7, 0x44, 0x24, 0x7b, .. "4000"u8, 0x90, 0x48, 0xb8, .. "22047199"u8, 0xc3];
+        var patched = GuestImei.Patched(stock, "356938035643809")!;
+        var text = System.Text.Encoding.ASCII.GetString(patched);
+        Assert.Contains("3569", text);
+        Assert.Contains("9380", text);
+        Assert.Contains("35643809", text);
+        Assert.Equal(stock.Length, patched.Length);
+        Assert.Null(GuestImei.Patched(stock[..^12], "356938035643809")); // the 64-bit move missing
+        Assert.Null(GuestImei.Patched([.. stock, .. stock], "356938035643809")); // ambiguous
+    }
+
+    [Fact]
     public void IdentityScriptRestoresThenRewrites()
     {
         var script = DeviceSetup.IdentityScript(DeviceIdentity.Presets[0]);

@@ -85,10 +85,65 @@ public sealed record PhoneLine(
     [property: JsonPropertyName("phoneNumber")] string PhoneNumber = "",
     [property: JsonPropertyName("imei")] string Imei = "")
 {
+    public const int ImeiLength = 15;
+
     /// Null when usable. The engine refuses anything but digits ("+" included) and then won't start.
     [JsonIgnore]
-    public string? Problem => PhoneNumber.Length > 0 && (PhoneNumber.Length is < 3 or > 15 || !PhoneNumber.All(char.IsAsciiDigit))
-        ? "Phone number: 3–15 digits, no + or spaces (country code first, e.g. 15550101234)." : null;
+    public string? Problem =>
+        PhoneNumber.Length > 0 && (PhoneNumber.Length is < 3 or > 15 || !PhoneNumber.All(char.IsAsciiDigit))
+            ? "Phone number: 3–15 digits, no + or spaces (country code first, e.g. 15550101234)."
+        : Imei.Length > 0 && (Imei.Length != ImeiLength || !Imei.All(char.IsAsciiDigit)) ? "IMEI must be 15 digits."
+        : Imei.Length > 0 && LuhnCheckDigit(Imei[..^1]) != Imei[^1] - '0' ? "That IMEI's last digit (checksum) is wrong."
+        : null;
+
+    /// The Luhn checksum every real IMEI's 15th digit satisfies.
+    public static int LuhnCheckDigit(string payload)
+    {
+        var sum = 0;
+        for (var i = 0; i < payload.Length; i++)
+        {
+            var d = payload[payload.Length - 1 - i] - '0';
+            if (i % 2 == 0) { d *= 2; if (d > 9) d -= 9; } // doubled from the rightmost payload digit
+            sum += d;
+        }
+        return (10 - sum % 10) % 10;
+    }
+
+    /// A valid-looking IMEI: "35" (a common GSMA reporting body) + 12 random digits + checksum (Mac: randomIMEI).
+    public static string RandomImei()
+    {
+        var payload = "35" + string.Concat(Enumerable.Range(0, 12).Select(_ => Random.Shared.Next(10)));
+        return payload + LuhnCheckDigit(payload);
+    }
+}
+
+/// Android 15's radio library (Google's reference RIL, `RefRadioModem::getImei`) answers the IMEI request
+/// with "867400022047199" built from instruction immediates, not from the modem (Mac: GuestIMEI, arm64).
+/// The x86_64 build stores it with three moves: "8674" and "4000" (overlapping one digit) into a buffer,
+/// then "22047199" as one 64-bit immediate.
+public static class GuestImei
+{
+    static readonly (byte[] Pattern, int Opcode, Range Characters)[] Slots =
+    [
+        ([0xc7, 0x44, 0x24, 0x78, .. "8674"u8], 4, 0..4),      // movl $imm32, 0x78(%rsp)
+        ([0xc7, 0x44, 0x24, 0x7b, .. "4000"u8], 4, 3..7),      // movl $imm32, 0x7b(%rsp)
+        ([0x48, 0xb8, .. "22047199"u8], 2, 7..15),             // movabsq $imm64, %rax
+    ];
+
+    /// The stock library with `imei` written in; null when its code isn't laid out as expected.
+    public static byte[]? Patched(byte[] stock, string imei)
+    {
+        if (imei.Length != PhoneLine.ImeiLength) return null;
+        var result = (byte[])stock.Clone();
+        var digits = System.Text.Encoding.ASCII.GetBytes(imei);
+        foreach (var (pattern, opcode, characters) in Slots)
+        {
+            var at = stock.AsSpan().IndexOf(pattern);
+            if (at < 0 || stock.AsSpan(at + 1).IndexOf(pattern) >= 0) return null; // missing or ambiguous
+            digits.AsSpan(characters).CopyTo(result.AsSpan(at + opcode));
+        }
+        return result;
+    }
 }
 
 /// An instance's device settings: profile, model and phone line (the Mac keeps them in UserDefaults per
@@ -187,6 +242,43 @@ public static class DeviceSetup
         await Engine.AdbAsync(serial, ["shell", IdentityScript(identity)]);
         await RebootAsync(serial);
         return true;
+    }
+
+    const string RadioLibrary = "/vendor/lib64/libril-modem-lib.so";
+
+    /// Writes `imei` (validated, or empty for stock) into Android's radio library, which answers Settings'
+    /// IMEI request itself (GuestImei). The original is kept once as `.myemu-orig`. True when it changed
+    /// something (the radio restarts). Mac: Engine.applyGuestIMEI.
+    public static async Task<bool> ApplyImeiAsync(string imei, string serial)
+    {
+        var original = RadioLibrary + ".myemu-orig";
+        await BecomeRootAsync(serial); // the shell user can't look into /vendor/lib64
+        var hasBackup = (await Engine.AdbAsync(serial, ["shell", $"test -f {original} && echo yes || true"])).Contains("yes");
+        if (imei.Length == 0 && !hasBackup) return false; // never touched
+        var work = Directory.CreateTempSubdirectory("myemu-ril-");
+        try
+        {
+            var stockFile = Path.Combine(work.FullName, "stock.so");
+            var currentFile = Path.Combine(work.FullName, "current.so");
+            await Engine.AdbAsync(serial, ["pull", hasBackup ? original : RadioLibrary, stockFile]);
+            await Engine.AdbAsync(serial, ["pull", RadioLibrary, currentFile]);
+            var stock = await File.ReadAllBytesAsync(stockFile);
+            var wanted = imei.Length == 0 ? stock : GuestImei.Patched(stock, imei)
+                ?? throw new InvalidOperationException("This Android's radio library is laid out differently; IMEI unchanged.");
+            var current = await File.ReadAllBytesAsync(currentFile);
+            if (wanted.AsSpan().SequenceEqual(current)) return false;
+            await RemountAsync(serial);
+            await Engine.AdbAsync(serial, ["shell", $"test -f {original} || cp -p {RadioLibrary} {original}"]);
+            var staged = Path.Combine(work.FullName, "staged.so");
+            await File.WriteAllBytesAsync(staged, wanted);
+            const string temp = "/data/local/tmp/myemu-ril.so";
+            await Engine.AdbAsync(serial, ["push", staged, temp]);
+            // cat keeps the library's file (and SELinux label); then reload the radio and the phone app.
+            await Engine.AdbAsync(serial, ["shell",
+                $"cat {temp} > {RadioLibrary} && rm {temp} && setprop ctl.restart vendor.ril-daemon && sleep 2 && kill $(pidof com.android.phone)"]);
+            return true;
+        }
+        finally { work.Delete(recursive: true); }
     }
 
     /// The phone name in Android's Settings. `name` must be a validated MarketName.

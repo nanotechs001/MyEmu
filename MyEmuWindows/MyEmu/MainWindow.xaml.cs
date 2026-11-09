@@ -191,6 +191,7 @@ public partial class MainWindow : Window
         deviceSetup?.Cancel();
         var cancel = deviceSetup = CancellationTokenSource.CreateLinkedTokenSource(running.Token);
         var identity = device.Identity;
+        var imei = device.PhoneLine.Imei;
         _ = Task.Run(async () =>
         {
             void Say(string? text) => Dispatcher.BeginInvoke(() => { if (!cancel.IsCancellationRequested) notice = text; });
@@ -205,6 +206,7 @@ public partial class MainWindow : Window
                 Say("Setting device model…");
                 if (await DeviceSetup.ApplyIdentityAsync(identity, serial)) Say("Restarted with the new model");
                 await DeviceSetup.SetDeviceNameAsync(identity.MarketName, serial);
+                if (await DeviceSetup.ApplyImeiAsync(imei, serial)) Say("IMEI set");
                 Say(null);
                 await Dispatcher.BeginInvoke(ApplyGameSpeed); // the reboots above cleared the live speed
             }
@@ -233,18 +235,20 @@ public partial class MainWindow : Window
         }
         ModelBox.SelectedItem = ModelBox.Items.Cast<ComboBoxItem>().FirstOrDefault(i => Equals(i.Tag, d.Identity)) ?? ModelBox.Items[^1];
         foreach (var (box, value) in new[] { (MarketNameBox, d.Identity.MarketName), (BrandBox, d.Identity.Brand), (MakerBox, d.Identity.Manufacturer),
-                     (ModelNameBox, d.Identity.Model), (PhoneBox, d.PhoneLine.PhoneNumber) })
+                     (ModelNameBox, d.Identity.Model), (PhoneBox, d.PhoneLine.PhoneNumber), (ImeiBox, d.PhoneLine.Imei) })
             if (!box.IsKeyboardFocused) box.Text = value;
 
         var profileChanged = d.Profile != device.Profile;
         var custom = d.Profile == DeviceProfile.CustomModel;
         var identityChanged = custom && d.Identity != device.Identity;
-        var phoneChanged = custom && d.PhoneLine != device.PhoneLine;
-        DeviceApplyBox.Visibility = profileChanged || identityChanged || phoneChanged ? Visibility.Visible : Visibility.Collapsed;
+        var phoneChanged = custom && d.PhoneLine.PhoneNumber != device.PhoneLine.PhoneNumber; // the engine sets it as it starts
+        var imeiChanged = custom && d.PhoneLine.Imei != device.PhoneLine.Imei; // written live
+        DeviceApplyBox.Visibility = profileChanged || identityChanged || phoneChanged || imeiChanged ? Visibility.Visible : Visibility.Collapsed;
         var problem = custom ? d.Identity.Problem ?? d.PhoneLine.Problem : null;
         DeviceApplyNote.Text = problem ?? (profileChanged
             ? $"Android restarts in the {d.Profile.Title()} profile. The first switch to Custom model sets up its Android (a few minutes)."
-            : phoneChanged ? "Android restarts to apply the new phone number." : "Android restarts once to load the new model.");
+            : phoneChanged ? "Android restarts to apply the new phone number."
+            : identityChanged ? "Android restarts once to load the new model." : "Android's radio restarts with the new IMEI.");
         DeviceApplyNote.Foreground = problem != null ? System.Windows.Media.Brushes.IndianRed : System.Windows.Media.Brushes.LightGray;
         DeviceApplyButton.Content = profileChanged || phoneChanged ? "Apply & Restart" : "Apply";
         DeviceApplyButton.IsEnabled = problem == null && !restarting && engine != null;
@@ -297,8 +301,14 @@ public partial class MainWindow : Window
         deviceDraft = deviceDraft with
         {
             Identity = new DeviceIdentity(BrandBox.Text.Trim(), MakerBox.Text.Trim(), ModelNameBox.Text.Trim(), MarketNameBox.Text.Trim()),
-            PhoneLine = deviceDraft.PhoneLine with { PhoneNumber = PhoneBox.Text.Trim() },
+            PhoneLine = new PhoneLine(PhoneBox.Text.Trim(), ImeiBox.Text.Trim()),
         };
+        ShowDevice();
+    }
+
+    void RandomImei_Click(object sender, RoutedEventArgs e)
+    {
+        deviceDraft = deviceDraft with { PhoneLine = deviceDraft.PhoneLine with { Imei = PhoneLine.RandomImei() } };
         ShowDevice();
     }
 
@@ -310,7 +320,7 @@ public partial class MainWindow : Window
         ShowDevice();
         // A new profile is the other AVD, and the engine sets the phone number as it starts: restart. A new
         // model on the running custom profile is written live (Android reboots once).
-        if (device.Profile != old.Profile || device.Profile == DeviceProfile.CustomModel && device.PhoneLine != old.PhoneLine)
+        if (device.Profile != old.Profile || device.Profile == DeviceProfile.CustomModel && device.PhoneLine.PhoneNumber != old.PhoneLine.PhoneNumber)
             await RestartAndroidAsync();
         else if (device.Profile == DeviceProfile.CustomModel && engine is { } e2) SetUpCustomModel(e2.Serial);
     }

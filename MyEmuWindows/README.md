@@ -88,8 +88,12 @@ Status (2026-11-08, branch `windows-autopots`):
     Windows Hypervisor Platform (elevated, then restart). On a new PC the first start creates the main
     Android from `AvdFiles.DefaultConfig` with CPU/memory suggested for the PC. Uninstalling keeps Androids
     (`%USERPROFILE%\.android\avd`) and settings (`%LOCALAPPDATA%\MyEmu`).
-  - Not yet: IMEI (the Mac patches arm64 code in the radio library and injects into the engine; the x86_64
-    image needs its own patch).
+  - IMEI (Custom model; Device → IMEI, Random; `phoneLine.imei` in the device JSON). Like the Mac's guest
+    patch, `GuestImei` rewrites the default "867400022047199" in `/vendor/lib64/libril-modem-lib.so`
+    (`RefRadioModem::getImei`); the x86_64 build holds it in three move immediates ("8674", "4000",
+    "22047199"). Original kept as `.myemu-orig`; the radio daemon restarts, no Android restart. Checked:
+    `service call iphonesubinfo 1` returns the new IMEI, and the stock one after clearing it. Not ported:
+    the Mac's engine-side modem hook (DYLD, `MYEMU_IMEI`) — would be DLL injection into qemu here.
 The Mac app in `MyEmu/` is Swift/AppKit/Metal and cannot be compiled for Windows — the Windows
 version is a new native app that reuses MyEmu's file formats, engine commands and test fixtures.
 
