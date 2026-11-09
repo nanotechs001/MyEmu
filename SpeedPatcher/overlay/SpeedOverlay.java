@@ -436,7 +436,10 @@ public final class SpeedOverlay implements Application.ActivityLifecycleCallback
             main.post(() -> { if (panelStatus != null) panelStatus.setText(shown); });
         }
 
+        private static long huntingSince; // when the game was first seen hunting since the last hold
+
         private static void hold(boolean hold) {
+            if (hold) huntingSince = 0;
             if (held == hold) return;
             held = hold;
             applySpeed();
@@ -521,8 +524,15 @@ public final class SpeedOverlay implements Application.ActivityLifecycleCallback
             if (hud) {
                 if (yellow >= 0.5f) { // measured: hunting 0.58-0.66 (MuMu and a Fold), not hunting 0.39-0.40
                     notHunting = 0;
-                    hold(false);
-                    status("Hunting");
+                    // 10 s of hunting at 1× (after a login or turning auto-hunt on) before the chosen speed.
+                    if (huntingSince == 0) huntingSince = now;
+                    long wait = 10000 - (now - huntingSince);
+                    if (!held || wait <= 0) {
+                        hold(false);
+                        status("Hunting");
+                    } else {
+                        status("Hunting: " + label() + " in " + (wait + 999) / 1000 + " s");
+                    }
                 } else {
                     hold(true);
                     if (++notHunting >= 2 && now - lastTap > 15000) {
