@@ -18,7 +18,8 @@ public static class Engine
 
     public static string EmulatorExe => Path.Combine(Sdk, "emulator", "emulator.exe");
     public static string AdbExe => Path.Combine(Sdk, "platform-tools", "adb.exe");
-    public static string LogFile => Path.Combine(LocalAppData, "MyEmu", "engine.log");
+    /// One per AVD: instances run side by side.
+    public static string LogFile(string avd) => Path.Combine(LocalAppData, "MyEmu", avd == "myemu" ? "engine.log" : $"engine-{avd}.log");
 
     /// Where the engine writes pid_<pid>.ini (port, token, ...): %TEMP%\avd\running on Windows.
     static string DiscoveryDir => Path.Combine(Path.GetTempPath(), "avd", "running");
@@ -51,9 +52,9 @@ public static class Engine
         if (changes.Count > 0) await File.WriteAllTextAsync(configPath, Ini.Update(text, changes), cancel);
         var size = DeviceSize.FromAvdConfig(config);
 
-        Directory.CreateDirectory(Path.GetDirectoryName(LogFile)!);
+        Directory.CreateDirectory(Path.GetDirectoryName(LogFile(avd))!);
         // Shared: a restart opens it again while the old engine's output pump may still hold it.
-        var log = new StreamWriter(new FileStream(LogFile, FileMode.Create, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete)) { AutoFlush = true };
+        var log = new StreamWriter(new FileStream(LogFile(avd), FileMode.Create, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete)) { AutoFlush = true };
         var info = new ProcessStartInfo(EmulatorExe)
         {
             UseShellExecute = false, CreateNoWindow = true,
@@ -76,7 +77,7 @@ public static class Engine
         {
             if (ReadDiscovery(port, launchedAt) is { } values && values.TryGetValue("grpc.token", out var token))
                 return new EngineInstance(port, token, $"emulator-{values.GetValueOrDefault("port.serial", "5554")}", size, process);
-            if (process.HasExited) throw new InvalidOperationException($"Emulator engine exited during startup (code {process.ExitCode}). Log: {LogFile}");
+            if (process.HasExited) throw new InvalidOperationException($"Emulator engine exited during startup (code {process.ExitCode}). Log: {LogFile(avd)}");
             await Task.Delay(500, cancel);
         }
         process.Kill(entireProcessTree: true);

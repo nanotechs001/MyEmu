@@ -9,9 +9,9 @@ namespace MyEmu;
 
 public partial class MainWindow : Window
 {
-    const int GrpcPort = 8554; // instance 1, as on the Mac
     const int KeyBack = 158, KeyHome = 172, KeyRecents = 580; // Linux evdev codes
 
+    readonly Instance instance;
     readonly string avd;
     CancellationTokenSource running = new(); // one per engine run: replaced on restart
     Task engineTask = Task.CompletedTask;
@@ -27,7 +27,7 @@ public partial class MainWindow : Window
     long fpsReceived;
     bool stopping;
 
-    readonly AndroidOptions options = AndroidOptions.Load();
+    readonly AndroidOptions options = AndroidOptions.Shared;
     int displayMaxFps = 60;
     bool runningGuestAngle;
     string? currentApp; // the app in front in Android
@@ -40,10 +40,15 @@ public partial class MainWindow : Window
     KeymapOverlay? overlay;
     CancellationTokenSource? typingWatch, typingCheck;
 
-    public MainWindow(string avd)
+    public MainWindow(Instance instance)
     {
-        this.avd = avd;
+        this.instance = instance;
+        avd = instance.Avd;
         InitializeComponent();
+        Title = $"MyEmu · {instance.Name}";
+        InstanceManager.Changed += ShowInstances;
+        InstanceManager.OptionsChanged += OtherWindowChangedOptions;
+        Closed += (_, _) => { InstanceManager.Changed -= ShowInstances; InstanceManager.OptionsChanged -= OtherWindowChangedOptions; };
         gameKeys = new GameKeys(t => client?.Touch(t.Id, t.X, t.Y, t.Pressed),
             () => options.GameKeysEnabled, on => { options.GameKeysEnabled = on; options.Save(); });
         gameKeys.OnChange += () => { overlay?.Refresh(); ShowGameKeys(); };
@@ -65,8 +70,7 @@ public partial class MainWindow : Window
         ShowOptions();
         StateChanged += (_, _) => ApplyRate(); // minimized → background frame rate
         Loaded += (_, _) => engineTask = StartAsync();
-        AiControlBox.IsChecked = options.AiControl;
-        if (options.AiControl) Loaded += async (_, _) => await SetAiControlAsync(true);
+        ShowInstances();
         Closing += OnClosing;
         PreviewKeyDown += (_, e) => OnKey(e, down: true);
         PreviewKeyUp += (_, e) => OnKey(e, down: false);
@@ -82,7 +86,8 @@ public partial class MainWindow : Window
             displayMaxFps = RefreshRate();
             Status.Text = $"Starting {avd}...";
             runningGuestAngle = options.GuestAngle;
-            engine = await Engine.StartAsync(avd, GrpcPort, displayMaxFps, runningGuestAngle, cancel);
+            if (instance.Number > 1) AvdFiles.Ensure(avd, Instance.Main.Avd); // a new instance's first start
+            engine = await Engine.StartAsync(avd, instance.GrpcPort, displayMaxFps, runningGuestAngle, cancel);
             avdSettings = draft = AvdSettings.Read(avd);
             client = new EmulatorClient(engine.Port, engine.Token);
             frames = new FrameBuffer(engine.Size.Width * engine.Size.Height * 4);
@@ -162,50 +167,125 @@ public partial class MainWindow : Window
         engineTask = StartAsync();
     }
 
-    // --- AI control (Mac: AIControl + MyEmuMCP; one instance here)
+    // --- MCP hooks (InstanceManager's AI control calls these on the UI thread)
 
-    McpHttpServer? mcp;
+    /// Running: this window's Android is up or starting (not stopped over MCP).
+    internal McpInstanceState McpState(Instance current) =>
+        new(current.Id, current.Name, engine != null || !engineTask.IsCompleted, engine?.Serial, Status.Text, currentApp);
 
-    async Task SetAiControlAsync(bool on)
+    internal string McpStart()
     {
-        if (mcp != null) { await mcp.DisposeAsync(); mcp = null; }
-        AiControlUrl.Text = on ? McpHttpServer.Url : "";
-        AiControlNote.Foreground = System.Windows.Media.Brushes.Gray;
-        if (!on) return;
-        var tools = new MyEmuMcp(
-            state: () => Dispatcher.InvokeAsync(() => new McpWindowState(engine != null && !restarting, engine?.Serial, Status.Text, currentApp)).Task,
-            start: () => Dispatcher.InvokeAsync(() =>
-            {
-                if (engine != null || restarting || !engineTask.IsCompleted) return "Android 1 is already running or starting. Poll list_instances until ready is true.";
-                StartAndroid();
-                return "Starting Android 1. Poll list_instances until ready is true.";
-            }).Task,
-            stop: () => Dispatcher.InvokeAsync(async () =>
-            {
-                if (engine == null || restarting) return "Android 1 isn't running.";
-                restarting = true; // no restart or second stop meanwhile
-                Status.Text = "Stopping Android…";
-                await StopAndroidAsync();
-                restarting = false;
-                Status.Text = "Android stopped. start_instance (MCP) starts it again.";
-                ShowDisplay();
-                return "Stopped Android 1.";
-            }).Task.Unwrap(),
-            screen: () => frames is { } f && frameWidth > 0 ? ((byte[])f.Pixels.Clone(), frameWidth, frameHeight) : null);
-        try { mcp = await McpHttpServer.StartAsync(tools.Dispatcher); }
-        catch (Exception e)
+        if (engine != null || restarting || !engineTask.IsCompleted) return $"{instance.Name} is already running or starting. Poll list_instances until ready is true.";
+        StartAndroid();
+        return $"Starting {instance.Name}. Poll list_instances until ready is true.";
+    }
+
+    /// Stops Android; the window stays (closing the last window would quit MyEmu and its MCP server).
+    internal async Task<string> McpStopAsync()
+    {
+        if (engine == null || restarting) return $"{instance.Name} isn't running.";
+        restarting = true; // no restart or second stop meanwhile
+        Status.Text = "Stopping Android…";
+        await StopAndroidAsync();
+        restarting = false;
+        Status.Text = "Android stopped. start_instance (MCP) starts it again.";
+        ShowDisplay();
+        return $"Stopped {instance.Name}.";
+    }
+
+    /// The newest frame, copied (called off the UI thread by MCP).
+    internal (byte[] Rgba, int Width, int Height)? ScreenCopy() =>
+        frames is { } f && frameWidth > 0 ? ((byte[])f.Pixels.Clone(), frameWidth, frameHeight) : null;
+
+    // --- Instances and AI control (Mac: InstancesDrawer, AIControlSection)
+
+    void ShowInstances()
+    {
+        var wasLoading = loadingOptions;
+        loadingOptions = true;
+        AiControlBox.IsChecked = options.AiControl;
+        AiControlUrl.Text = InstanceManager.AiControlRunning ? McpHttpServer.Url : "";
+        AiControlNote.Text = InstanceManager.AiControlProblem
+            ?? "AI apps (Claude Code, Codex…) can see every Android's screen and tap, type and open apps through this local address.";
+        AiControlNote.Foreground = InstanceManager.AiControlProblem != null ? System.Windows.Media.Brushes.IndianRed : System.Windows.Media.Brushes.Gray;
+        loadingOptions = wasLoading;
+
+        if (InstancesPanel.IsKeyboardFocusWithin) return; // a name is being typed: rebuilt when it's done
+        InstancesPanel.Children.Clear();
+        var busy = InstanceManager.Busy;
+        foreach (var other in InstanceManager.List.Instances)
         {
-            AiControlUrl.Text = "";
-            AiControlNote.Text = $"Couldn't start on port {McpHttpServer.Port}: {e.Message}";
-            AiControlNote.Foreground = System.Windows.Media.Brushes.IndianRed;
+            var id = other.Id;
+            var window = InstanceManager.Window(id);
+            var isThis = id == instance.Id;
+            var name = new TextBox { Text = other.Name, Width = 150, FontWeight = isThis ? FontWeights.SemiBold : FontWeights.Normal };
+            name.LostFocus += (_, _) => { if (name.Text != other.Name) InstanceManager.Rename(id, name.Text); };
+            name.KeyDown += (_, e) => { if (e.Key == Key.Enter) FocusScreen(); };
+            var header = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 8, 0, 2) };
+            header.Children.Add(new TextBlock
+            {
+                Text = "●", Margin = new Thickness(0, 2, 6, 0), FontSize = 12,
+                Foreground = window != null ? System.Windows.Media.Brushes.LimeGreen : System.Windows.Media.Brushes.DimGray,
+            });
+            header.Children.Add(name);
+            if (isThis) header.Children.Add(new TextBlock { Text = "this window", Margin = new Thickness(6, 3, 0, 0) });
+            var buttons = new WrapPanel();
+            Button Add(string label, Action click, bool enabled = true)
+            {
+                var button = new Button { Content = label, Padding = new Thickness(8, 1, 8, 1), Margin = new Thickness(0, 0, 4, 0), Focusable = false, IsEnabled = enabled };
+                button.Click += (_, _) => click();
+                buttons.Children.Add(button);
+                return button;
+            }
+            if (window == null) Add("Start", () => InstanceManager.Open(id));
+            else
+            {
+                if (!isThis) Add("Show", () => InstanceManager.Open(id));
+                Add("Stop", () => window.Close()); // closing a window stops its Android
+            }
+            Add("Clone", () => CloneInstance(id), window == null && busy == null && InstanceManager.List.CanAdd);
+            if (other.Number > 1) Add("Delete", () => DeleteInstance(other), window == null && busy == null);
+            InstancesPanel.Children.Add(header);
+            InstancesPanel.Children.Add(buttons);
         }
+        NewInstanceButton.IsEnabled = busy == null && InstanceManager.List.CanAdd;
+        InstancesBusy.Text = busy ?? "";
+        InstancesBusy.Visibility = busy == null ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    void NewInstance_Click(object sender, RoutedEventArgs e)
+    {
+        if (InstanceManager.Create() is { } created) InstanceManager.Open(created.Id);
+    }
+
+    async void CloneInstance(string id)
+    {
+        try { await InstanceManager.CloneAsync(id); }
+        catch (Exception e) { MessageBox.Show(this, e.Message, "Couldn't clone the instance", MessageBoxButton.OK, MessageBoxImage.Error); }
+    }
+
+    void DeleteInstance(Instance other)
+    {
+        if (MessageBox.Show(this, $"This deletes {other.Name} and all its apps, sign-ins and game data. It can't be undone.",
+                $"Delete {other.Name}?", MessageBoxButton.OKCancel, MessageBoxImage.Warning) != MessageBoxResult.OK) return;
+        try { InstanceManager.Delete(other.Id); }
+        catch (Exception e) { MessageBox.Show(this, e.Message, "Couldn't delete the instance", MessageBoxButton.OK, MessageBoxImage.Error); }
     }
 
     async void AiControl_Click(object sender, RoutedEventArgs e)
     {
         options.AiControl = AiControlBox.IsChecked == true;
         options.Save();
-        await SetAiControlAsync(options.AiControl);
+        await InstanceManager.SetAiControlAsync(options.AiControl);
+    }
+
+    /// Another instance's window changed the app-wide options: show and apply them here too.
+    void OtherWindowChangedOptions(MainWindow from)
+    {
+        if (from == this) return;
+        ShowOptions();
+        ShowDisplay();
+        ApplyOptions();
     }
 
     // --- Android options (Mac: EmulatorModel.applyAndroidOptions / applyAndroidRate / watchForegroundApp)
@@ -527,6 +607,7 @@ public partial class MainWindow : Window
         UpdateOptionNotes();
         ShowDisplay(); // a renderer change shows Apply & Restart
         ApplyOptions();
+        InstanceManager.ApplyOptionsEverywhere(this);
     }
 
     void UpdateOptionNotes()

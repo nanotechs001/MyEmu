@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.IO;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -6,28 +7,27 @@ using System.Windows.Media.Imaging;
 
 namespace MyEmu;
 
-/// What the window tells the MCP tools (read on the UI thread).
-public sealed record McpWindowState(bool Running, string? Serial, string Status, string? ForegroundApp);
+/// One instance as the MCP tools see it (read on the UI thread). Running: its window is open.
+public sealed record McpInstanceState(string Id, string Name, bool Running, string? Serial, string Status, string? ForegroundApp);
 
-/// What an AI can do over MCP (Mac: MyEmuMCP.swift): what you do in MyEmu's window — start and stop
-/// Android, look at the screen, tap, swipe, type, press keys and open apps. Windows runs one instance.
-public sealed class MyEmuMcp(Func<Task<McpWindowState>> state, Func<Task<string>> start, Func<Task<string>> stop,
-    Func<(byte[] Rgba, int Width, int Height)?> screen)
+/// What an AI can do over MCP (Mac: MyEmuMCP.swift): what you do in MyEmu's windows — start and stop
+/// Androids, look at a screen, tap, swipe, type, press keys and open apps.
+public sealed class MyEmuMcp(Func<Task<IReadOnlyList<McpInstanceState>>> instances, Func<string, Task<string>> start,
+    Func<string, Task<string>> stop, Func<string, (byte[] Rgba, int Width, int Height)?> screen)
 {
-    public const string InstanceId = "main", InstanceName = "Android 1"; // the Mac's instance 1
     /// Screenshots are scaled to fit this, small enough for an AI to read quickly.
     public const int MaxScreenshotSide = 1280;
     const double DefaultLongPressMs = 800, DefaultSwipeMs = 300, MaxGestureMs = 10_000;
     const int MaxTextLength = 1000;
 
-    /// The last screenshot's scale (image pixels per screen pixel): taps use the coordinates the AI saw.
-    double screenshotScale = 1;
+    /// Each instance's last screenshot scale (image pixels per screen pixel): taps use the coordinates the AI saw.
+    readonly ConcurrentDictionary<string, double> screenshotScale = new();
 
     public McpDispatcher Dispatcher => new("MyEmu", typeof(MyEmuMcp).Assembly.GetName().Version?.ToString(3) ?? "dev",
         Instructions, Tools, CallAsync);
 
     const string Instructions =
-        "Controls MyEmu, an Android emulator on this PC, the way a person uses its window. " +
+        "Controls MyEmu, an Android emulator on this PC, the way a person uses its windows. " +
         "Call list_instances first. Start an instance and poll list_instances until it's ready. " +
         "Take a screenshot to see the screen, then tap, long_press or swipe using that screenshot's " +
         "pixel coordinates, and take a new screenshot to check what happened.";
@@ -63,8 +63,8 @@ public sealed class MyEmuMcp(Func<Task<McpWindowState>> state, Func<Task<string>
     public static readonly McpTool[] Tools =
     [
         Tool("list_instances", "Every Android in MyEmu: id, name, whether it's running and ready, and for running ones their status and app in front."),
-        OnInstance("start_instance", "Starts Android in MyEmu's window. It takes a minute or so: poll list_instances until ready is true."),
-        OnInstance("stop_instance", "Shuts Android down (MyEmu's window stays open)."),
+        OnInstance("start_instance", "Starts an instance (opens its window, or starts its Android if the window is open). Android takes a minute or so: poll list_instances until ready is true."),
+        OnInstance("stop_instance", "Shuts an instance's Android down (its window stays open)."),
         OnInstance("screenshot", "The instance's screen as an image. tap, long_press and swipe take x/y in this image's pixels."),
         OnInstance("tap", "Taps the screen at x, y (pixels of the latest screenshot).",
             new() { ["x"] = Number("Pixels from the left"), ["y"] = Number("Pixels from the top") }, ["x", "y"]),
@@ -91,38 +91,43 @@ public sealed class MyEmuMcp(Func<Task<McpWindowState>> state, Func<Task<string>
         switch (name)
         {
             case "list_instances": return [new McpText(await ListInstancesAsync())];
-            case "start_instance": CheckInstance(arguments); return [new McpText(await start())];
-            case "stop_instance": CheckInstance(arguments); return [new McpText(await stop())];
+            case "start_instance": return [new McpText(await start((await InstanceAsync(arguments)).Id))];
+            case "stop_instance":
+            {
+                var instance = await InstanceAsync(arguments);
+                screenshotScale.TryRemove(instance.Id, out _);
+                return [new McpText(await stop(instance.Id))];
+            }
             case "screenshot": return await ScreenshotAsync(arguments);
             case "tap":
             {
-                var serial = await ReadySerialAsync(arguments);
-                var (x, y) = Point(arguments, "x", "y");
+                var (instance, serial) = await ReadyAsync(arguments);
+                var (x, y) = Point(arguments, "x", "y", instance);
                 return [new McpText(await ShellAsync(serial, $"input tap {x} {y}", $"Tapped {x}, {y} on screen."))];
             }
             case "long_press":
             {
-                var serial = await ReadySerialAsync(arguments);
-                var (x, y) = Point(arguments, "x", "y");
+                var (instance, serial) = await ReadyAsync(arguments);
+                var (x, y) = Point(arguments, "x", "y", instance);
                 var ms = Duration(arguments, DefaultLongPressMs);
                 return [new McpText(await ShellAsync(serial, $"input swipe {x} {y} {x} {y} {ms}", $"Held {x}, {y} for {ms} ms."))];
             }
             case "swipe":
             {
-                var serial = await ReadySerialAsync(arguments);
-                var (x1, y1) = Point(arguments, "x1", "y1");
-                var (x2, y2) = Point(arguments, "x2", "y2");
+                var (instance, serial) = await ReadyAsync(arguments);
+                var (x1, y1) = Point(arguments, "x1", "y1", instance);
+                var (x2, y2) = Point(arguments, "x2", "y2", instance);
                 var ms = Duration(arguments, DefaultSwipeMs);
                 return [new McpText(await ShellAsync(serial, $"input swipe {x1} {y1} {x2} {y2} {ms}", "Swiped."))];
             }
             case "type_text":
             {
-                var serial = await ReadySerialAsync(arguments);
+                var (_, serial) = await ReadyAsync(arguments);
                 return [new McpText(await ShellAsync(serial, InputTextCommand(Str(arguments, "text") ?? ""), "Typed."))];
             }
             case "press_key":
             {
-                var serial = await ReadySerialAsync(arguments);
+                var (_, serial) = await ReadyAsync(arguments);
                 if (Str(arguments, "key") is not { } key || !Keys.TryGetValue(key, out var code))
                     throw new McpToolError($"key must be one of: {string.Join(", ", Keys.Keys.Order(StringComparer.Ordinal))}.");
                 return [new McpText(await ShellAsync(serial, $"input keyevent {code}", $"Pressed {key}."))];
@@ -133,19 +138,23 @@ public sealed class MyEmuMcp(Func<Task<McpWindowState>> state, Func<Task<string>
         }
     }
 
-    // --- Instance
+    // --- Instances
 
     async Task<string> ListInstancesAsync()
     {
-        var s = await state();
-        var row = new JsonObject { ["id"] = InstanceId, ["name"] = InstanceName, ["running"] = s.Running };
-        row["ready"] = s.Running && s.Serial != null && await IsBootedAsync(s.Serial);
-        if (s.Running)
+        var rows = new JsonArray();
+        foreach (var s in await instances())
         {
-            row["status"] = s.Status;
-            if (s.ForegroundApp != null) row["foregroundApp"] = s.ForegroundApp;
+            var row = new JsonObject { ["id"] = s.Id, ["name"] = s.Name, ["running"] = s.Running };
+            row["ready"] = s.Running && s.Serial != null && await IsBootedAsync(s.Serial);
+            if (s.Running)
+            {
+                row["status"] = s.Status;
+                if (s.ForegroundApp != null) row["foregroundApp"] = s.ForegroundApp;
+            }
+            rows.Add(row);
         }
-        return new JsonArray(row).ToJsonString(McpDispatcher.Json);
+        return rows.ToJsonString(McpDispatcher.Json);
     }
 
     static async Task<bool> IsBootedAsync(string serial)
@@ -154,41 +163,43 @@ public sealed class MyEmuMcp(Func<Task<McpWindowState>> state, Func<Task<string>
         catch { return false; } // adb not up yet
     }
 
-    static void CheckInstance(JsonObject arguments)
+    /// The instance named by `instance` (an id, or a name in any case).
+    async Task<McpInstanceState> InstanceAsync(JsonObject arguments)
     {
         if (Str(arguments, "instance") is not { } key) throw new McpToolError("Pass instance: an id or name from list_instances.");
-        if (!key.Equals(InstanceId, StringComparison.OrdinalIgnoreCase) && !key.Equals(InstanceName, StringComparison.OrdinalIgnoreCase))
-            throw new McpToolError($"No instance \"{key}\". Call list_instances for the ids.");
+        var all = await instances();
+        return all.FirstOrDefault(i => i.Id == key) ?? all.FirstOrDefault(i => i.Name.Equals(key, StringComparison.OrdinalIgnoreCase))
+            ?? throw new McpToolError($"No instance \"{key}\". Call list_instances for the ids.");
     }
 
-    /// The running Android's adb serial once it has finished starting.
-    async Task<string> ReadySerialAsync(JsonObject arguments)
+    /// A running instance whose Android has finished starting, with its adb serial.
+    async Task<(McpInstanceState Instance, string Serial)> ReadyAsync(JsonObject arguments)
     {
-        CheckInstance(arguments);
-        var s = await state();
-        if (!s.Running || s.Serial == null) throw new McpToolError($"{InstanceName} isn't running. Call start_instance first.");
-        if (!await IsBootedAsync(s.Serial)) throw new McpToolError($"{InstanceName} is still starting ({s.Status}). Try again in a few seconds.");
-        return s.Serial;
+        var s = await InstanceAsync(arguments);
+        if (!s.Running) throw new McpToolError($"{s.Name} isn't running. Call start_instance first.");
+        if (s.Serial == null || !await IsBootedAsync(s.Serial)) throw new McpToolError($"{s.Name} is still starting ({s.Status}). Try again in a few seconds.");
+        return (s, s.Serial);
     }
 
     // --- Screen and input
 
     async Task<IReadOnlyList<McpContent>> ScreenshotAsync(JsonObject arguments)
     {
-        await ReadySerialAsync(arguments);
-        if (screen() is not { } frame) throw new McpToolError("No frame from Android yet. Try again in a second.");
+        var (instance, _) = await ReadyAsync(arguments);
+        if (screen(instance.Id) is not { } frame) throw new McpToolError("No frame from Android yet. Try again in a second.");
         var shot = Screenshot.FromRgba(frame.Rgba, frame.Width, frame.Height, MaxScreenshotSide);
-        screenshotScale = shot.Scale;
+        screenshotScale[instance.Id] = shot.Scale;
         return [new McpImage(shot.Jpeg, "image/jpeg"),
-            new McpText($"{InstanceName}: a {shot.Width}×{shot.Height} image of its {frame.Width}×{frame.Height} screen. Give tap, long_press and swipe this image's pixel coordinates.")];
+            new McpText($"{instance.Name}: a {shot.Width}×{shot.Height} image of its {frame.Width}×{frame.Height} screen. Give tap, long_press and swipe this image's pixel coordinates.")];
     }
 
     /// Screen pixels for x/y given in the latest screenshot's pixels.
-    (int X, int Y) Point(JsonObject arguments, string xKey, string yKey)
+    (int X, int Y) Point(JsonObject arguments, string xKey, string yKey, McpInstanceState instance)
     {
         if (Num(arguments, xKey) is not { } x || Num(arguments, yKey) is not { } y || x < 0 || y < 0)
             throw new McpToolError($"{xKey} and {yKey} must be numbers of 0 or more.");
-        return ((int)Math.Round(x / screenshotScale), (int)Math.Round(y / screenshotScale));
+        var scale = screenshotScale.GetValueOrDefault(instance.Id, 1); // no screenshot yet: screen pixels
+        return ((int)Math.Round(x / scale), (int)Math.Round(y / scale));
     }
 
     static int Duration(JsonObject arguments, double fallback)
@@ -217,7 +228,7 @@ public sealed class MyEmuMcp(Func<Task<McpWindowState>> state, Func<Task<string>
 
     async Task<string> ListAppsAsync(JsonObject arguments)
     {
-        var serial = await ReadySerialAsync(arguments);
+        var (_, serial) = await ReadyAsync(arguments);
         var flag = arguments["include_system"]?.GetValueKind() == JsonValueKind.True ? "" : " -3"; // -3: apps you installed
         var output = await Engine.AdbAsync(serial, ["shell", $"pm list packages{flag}"]);
         var packages = output.Split('\n', '\r').Where(l => l.StartsWith("package:")).Select(l => l["package:".Length..].Trim()).Order(StringComparer.Ordinal).ToList();
@@ -226,7 +237,7 @@ public sealed class MyEmuMcp(Func<Task<McpWindowState>> state, Func<Task<string>
 
     async Task<string> LaunchAppAsync(JsonObject arguments)
     {
-        var serial = await ReadySerialAsync(arguments);
+        var (_, serial) = await ReadyAsync(arguments);
         if (Str(arguments, "package") is not { } package || !AndroidWatch.IsValidPackage(package))
             throw new McpToolError("package must be an Android package name, e.g. com.android.settings (see list_apps).");
         var output = await Engine.AdbAsync(serial, ["shell", $"monkey -p {package} -c android.intent.category.LAUNCHER 1"]);

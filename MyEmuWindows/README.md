@@ -7,7 +7,7 @@ Status (2026-11-08, branch `windows-autopots`):
 - **Interim:** `AutoPots/` — a .NET 8 WPF app that runs AutoPots beside a MuMu instance through
   MuMu's own SDK (`external_renderer_ipc.dll`) and MuMuManager. Test on MuMu instance 1.
 - **Step 1 started (branch `windows-app`, user's call: our own app, not a MuMu add-on):** `MyEmu/` — .NET 8 WPF.
-  `MyEmu.exe [avd]` starts Google's engine headless with gRPC (same flags as the Mac), shows Android's
+  `MyEmu.exe` starts Google's engine headless (instance 1, AVD `myemu`) with gRPC (same flags as the Mac), shows Android's
   screen in its window, mouse → touch, keyboard → Android (Windows scan codes), Back/Home/Recents, and
   shuts Android down on close. Tested with the phase-0 AVD `myemu`: Xerion starts and runs in the window.
   - Frames: gRPC `streamScreenshot` with the MMAP transport. On Windows the handle must be

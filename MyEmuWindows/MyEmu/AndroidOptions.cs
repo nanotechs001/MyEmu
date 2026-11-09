@@ -48,6 +48,9 @@ public sealed class AndroidOptions
 
     static string FilePath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MyEmu", "settings.json");
 
+    /// The one copy every instance window uses (they're app-wide, as on the Mac).
+    public static AndroidOptions Shared { get; } = Load();
+
     public static AndroidOptions Load()
     {
         try

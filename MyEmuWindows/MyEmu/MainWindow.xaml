@@ -57,7 +57,13 @@
                         <Style TargetType="ComboBox"><Setter Property="Focusable" Value="False"/></Style>
                     </StackPanel.Resources>
 
-                    <TextBlock Style="{StaticResource Heading}" Text="AI control" Margin="0,0,0,4"/>
+                    <TextBlock Style="{StaticResource Heading}" Text="Instances" Margin="0,0,0,0"/>
+                    <StackPanel x:Name="InstancesPanel"/>
+                    <TextBlock x:Name="InstancesBusy" Foreground="#f59e0b" Visibility="Collapsed"/>
+                    <Button x:Name="NewInstanceButton" Content="New instance" Margin="0,8,0,0" HorizontalAlignment="Left" Padding="8,2" Focusable="False" Click="NewInstance_Click"/>
+                    <TextBlock Text="Each instance is a separate Android with its own apps, sign-ins and data, in its own window. Closing a window stops that Android. Clone copies a stopped one with everything in it."/>
+
+                    <TextBlock Style="{StaticResource Heading}" Text="AI control"/>
                     <CheckBox x:Name="AiControlBox" Content="Allow AI control (MCP)" Click="AiControl_Click"/>
                     <TextBox x:Name="AiControlUrl" IsReadOnly="True" Background="Transparent" BorderThickness="0" Foreground="#e6e6e6" FontSize="11"/>
                     <TextBlock x:Name="AiControlNote" Text="AI apps (Claude Code, Codex…) can see the screen, tap, type and open apps through this local address."/>
