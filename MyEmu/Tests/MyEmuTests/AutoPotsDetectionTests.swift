@@ -179,3 +179,20 @@ func autoMapFindsTheOrbAndItsPotion(name: String) throws {
     #expect(SimpleHp.decode(SimpleHp.encode(sig)) == sig)
     #expect(SimpleHp.decode("0101") == nil) // pre-adaptive strings recalibrate
 }
+
+/// MyEmu on Windows, 1600×900: a class without mana, whose orb is red on both sides of the divider
+/// (same screenshot and ranges as MyEmuWindows' NoManaOrbTests).
+@Test func autoMapFindsAnAllRedOrbAndReadsADrain() throws {
+    let frame = try load("no_mana_full.png")
+    let box = try #require(HpDetector.autoMapOrb(frame), "the no-mana orb must be found")
+    // Measured red half x732…789, y745…873; the red potion bottle is at about x685.
+    #expect((728...738).contains(box[0]), "left \(box[0])")
+    #expect((50...62).contains(box[2]), "width \(box[2])")
+    let px = Float(box[0]) + HpDetector.potionXPerWidth * Float(box[2])
+    #expect((672...698).contains(px), "potion x \(px)")
+    // HP drained from the top: darken the top 40% of the orb.
+    var drained = frame.px
+    for y in 745..<(745 + 51) { for x in 700..<870 { drained[y * frame.width + x] = 0x101010 } }
+    let low = ArrayFrame(width: frame.width, height: frame.height, px: drained)
+    #expect(HpDetector.hpFractionArc(low, box[0], box[1], box[2], box[3]) < 0.7)
+}

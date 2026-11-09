@@ -97,6 +97,8 @@ enum HpDetector {
     private static let orbTopMarginPerHeight: Float = 0.13
     private static let orbHeightPerWidth: Float = 2.25
     private static let orbMinBlue: Float = 0.20
+    /// A red|red divider (no-mana orb) needs at least this many non-red pixels between the halves.
+    private static let minBarGap = 3
     private static let orbDividerMin: Float = 0.42
     private static let orbDividerMax: Float = 0.58
     private static let searchTop: Float = 0.40
@@ -169,18 +171,20 @@ enum HpDetector {
             for i in 0...bw {
                 if i < bw && rowCls[i] == .red { run += 1; continue }
                 if run >= minChord {
-                    // The blue half must start within the divider-bar gap (red resuming means it wasn't one).
+                    // The other half must start within the divider-bar gap: blue (mana), or red for classes
+                    // without mana, whose orb is red on both sides; red resuming after a highlight speck isn't a bar.
                     var xb = -1
                     var g = i
                     let gEnd = min(bw - 1, i + maxGap)
                     while g <= gEnd {
-                        if rowCls[g] == .blue { xb = g; break }
+                        if rowCls[g] == .blue || (rowCls[g] == .red && g - i >= minBarGap) { xb = g; break }
                         if rowCls[g] == .red { break }
                         g += 1
                     }
                     if xb >= 0 {
+                        let half = rowCls[xb]
                         var k = xb
-                        while k < bw && rowCls[k] == .blue { k += 1 }
+                        while k < bw && rowCls[k] == half { k += 1 }
                         if k - xb >= minChord { hits.append([y, x0 + i - 1, run, k - xb]) }
                     }
                 }
@@ -323,7 +327,7 @@ enum HpDetector {
         guard by1 > by0, bx1 > bx0 else { return 0 }
         var blueCount = 0
         for y in by0..<by1 {
-            for x in bx0..<bx1 where orbClass(frame.rgb(x, y)) == .blue { blueCount += 1 }
+            for x in bx0..<bx1 where [.blue, .red].contains(orbClass(frame.rgb(x, y))) { blueCount += 1 } // red: a no-mana orb
         }
         return Float(blueCount) / Float((by1 - by0) * (bx1 - bx0))
     }

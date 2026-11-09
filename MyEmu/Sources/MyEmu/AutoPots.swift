@@ -227,7 +227,7 @@ final class AutoPots {
     private static let detectSamples = 3
     private static let detectTries = 5
     private static let detectGap: Duration = .milliseconds(200)
-    /// A box that reads below this at full HP is nudged down until it doesn't (up to 40 px).
+    /// A box that reads below this at full HP has its top lowered until it doesn't (up to 40 px).
     private static let fullHPGate: Float = 0.97
     private static let maxNudgePx = 40
     /// autopotsCO aims the orb potion 8 px below the computed point.
@@ -275,7 +275,9 @@ final class AutoPots {
         var box = (0..<4).map { i in boxes.map { $0[i] }.sorted()[boxes.count / 2] } // median per coordinate
         var nudge = 0
         while HpDetector.hpFractionArc(frame, box[0], box[1], box[2], box[3]) < Self.fullHPGate, nudge < Self.maxNudgePx {
+            // Lower only the top edge: the box's top caught the rim; moving the whole box would push its bottom into the rim.
             box[1] += 1
+            box[3] -= 1
             nudge += 1
         }
         guard HpDetector.hpFractionArc(frame, box[0], box[1], box[2], box[3]) >= Self.fullHPGate else {
