@@ -70,7 +70,8 @@ public final class SpeedOverlay implements Application.ActivityLifecycleCallback
     private static volatile boolean watchdog, held;
     private static volatile Activity resumed;
     private static View panel;
-    private static TextView panelStatus;
+    private static TextView panelStatus, panelDetail;
+    private static Glyph panelStatusIcon;
 
     public static void start() {
         main.post(SpeedOverlay::attach);
@@ -134,12 +135,6 @@ public final class SpeedOverlay implements Application.ActivityLifecycleCallback
         return (s == Math.rint(s) ? String.valueOf((int) s) : String.valueOf(s)) + "×";
     }
 
-    private static GradientDrawable pill(float dp, int color) {
-        GradientDrawable pill = new GradientDrawable();
-        pill.setColor(color);
-        pill.setCornerRadius(18 * dp);
-        return pill;
-    }
 
     private static float dp(Activity activity) {
         return activity.getResources().getDisplayMetrics().density;
@@ -229,33 +224,42 @@ public final class SpeedOverlay implements Application.ActivityLifecycleCallback
         else if (SystemClock.uptimeMillis() - panelClosedAt > 300) showPanel(activity, button, at);
     }
 
-    // The dropdown: speed chips, watchdog switch (with its status), hide. Outside touches close it.
+    private static final int BLUE = 0xFF2F8BFF, SUBTLE = 0xFF9AA8C0, GREEN = 0xFF22C55E, AMBER = 0xFFF5B83D;
+
+    // The dropdown, a card in the middle of the screen: speed chips, the watchdog switch, hide in a
+    // minimize window / stop speed, and the watchdog's status. The X or a touch outside closes it.
     private static void showPanel(Activity activity, View button, WindowManager.LayoutParams at) {
         float dp = dp(activity);
-        int gold = 0xFFE0C080, grey = 0xFFB0B0B0;
+        int screenW = activity.getResources().getDisplayMetrics().widthPixels;
+        int screenH = activity.getResources().getDisplayMetrics().heightPixels;
         LinearLayout box = new LinearLayout(activity);
         box.setOrientation(LinearLayout.VERTICAL);
-        box.setPadding((int) (14 * dp), (int) (10 * dp), (int) (14 * dp), (int) (12 * dp));
-        box.setBackground(background(dp, 14));
+        box.setPadding((int) (20 * dp), (int) (16 * dp), (int) (20 * dp), (int) (14 * dp));
+        box.setBackground(card(dp));
 
-        box.addView(text(activity, "Speed", 12, gold));
-        LinearLayout chips = new LinearLayout(activity);
+        // Header: bolt, title and line, close.
+        LinearLayout header = row(activity);
+        header.addView(new Glyph(activity, Glyph.BOLT), size(dp, 34, 34, 0, 12));
+        LinearLayout titles = new LinearLayout(activity);
+        titles.setOrientation(LinearLayout.VERTICAL);
+        titles.addView(label(activity, "Speed", 20, Color.WHITE, true));
+        titles.addView(label(activity, "Adjust game speed for a smoother experience.", 12, SUBTLE, false));
+        header.addView(titles, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+        Glyph close = new Glyph(activity, Glyph.CLOSE);
+        close.setOnClickListener(v -> closePanel(activity));
+        header.addView(close, size(dp, 32, 32, 0, 0));
+        box.addView(header);
+
+        // Speed chips, sharing the width.
+        LinearLayout chips = row(activity);
+        chips.setPadding(0, (int) (14 * dp), 0, (int) (14 * dp));
         TextView[] chip = new TextView[SPEEDS.length];
         Runnable paintChips = () -> {
-            for (int i = 0; i < chip.length; i++) {
-                chip[i].setBackground(pill(dp, i == index ? gold : 0x33FFFFFF));
-                chip[i].setTextColor(i == index ? Color.BLACK : Color.WHITE);
-            }
+            for (int i = 0; i < chip.length; i++) chip[i].setBackground(chip(dp, i == index));
         };
         for (int i = 0; i < SPEEDS.length; i++) {
-            TextView c = new TextView(activity);
-            c.setText(label(SPEEDS[i]));
-            c.setTextSize(14);
-            c.setTypeface(Typeface.DEFAULT_BOLD);
+            TextView c = label(activity, label(SPEEDS[i]).replace('×', 'x'), 15, Color.WHITE, true);
             c.setGravity(Gravity.CENTER);
-            c.setMinWidth((int) (44 * dp));
-            c.setMinHeight((int) (36 * dp));
-            c.setPadding((int) (8 * dp), 0, (int) (8 * dp), 0);
             int pick = i;
             c.setOnClickListener(v -> {
                 index = pick;
@@ -263,98 +267,315 @@ public final class SpeedOverlay implements Application.ActivityLifecycleCallback
                 applySpeed();
                 paintChips.run();
             });
-            LinearLayout.LayoutParams gap = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-            gap.rightMargin = (int) (6 * dp);
-            chips.addView(c, gap);
+            LinearLayout.LayoutParams share = new LinearLayout.LayoutParams(0, (int) (40 * dp), 1);
+            share.leftMargin = share.rightMargin = (int) (3 * dp);
+            chips.addView(c, share);
             chip[i] = c;
         }
         paintChips.run();
         box.addView(chips);
 
-        LinearLayout row = new LinearLayout(activity);
-        row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setPadding(0, (int) (12 * dp), 0, 0);
-        TextView name = text(activity, "Watchdog", 15, Color.WHITE);
-        row.addView(name, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
-        TextView toggle = new TextView(activity);
-        toggle.setTextSize(13);
-        toggle.setTypeface(Typeface.DEFAULT_BOLD);
-        toggle.setGravity(Gravity.CENTER);
-        toggle.setMinWidth((int) (56 * dp));
-        toggle.setMinHeight((int) (30 * dp));
-        Runnable paintToggle = () -> {
-            toggle.setText(watchdog ? "ON" : "OFF");
-            toggle.setTextColor(watchdog ? Color.BLACK : Color.WHITE);
-            toggle.setBackground(pill(dp, watchdog ? 0xFF7BD389 : 0x33FFFFFF));
-        };
-        paintToggle.run();
-        row.addView(toggle);
-        row.setOnClickListener(v -> {
+        // Watchdog: shield, words, switch. The whole card toggles it.
+        LinearLayout dog = row(activity);
+        dog.setPadding((int) (14 * dp), (int) (12 * dp), (int) (14 * dp), (int) (12 * dp));
+        dog.setBackground(tile(dp));
+        dog.addView(new Glyph(activity, Glyph.SHIELD), size(dp, 44, 44, 0, 12));
+        View divider = new View(activity);
+        divider.setBackgroundColor(0x33FFFFFF);
+        dog.addView(divider, size(dp, 1, 40, 0, 14));
+        LinearLayout words = new LinearLayout(activity);
+        words.setOrientation(LinearLayout.VERTICAL);
+        words.addView(label(activity, "Watchdog", 17, Color.WHITE, true));
+        words.addView(label(activity, "Keeps the game running: logs back in, turns auto-hunt on, 1× until hunting.", 12, SUBTLE, false));
+        dog.addView(words, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+        Glyph toggle = new Glyph(activity, Glyph.SWITCH);
+        toggle.on = watchdog;
+        dog.addView(toggle, size(dp, 72, 34, 10, 0));
+        dog.setOnClickListener(v -> {
             watchdog = !watchdog;
             prefs.edit().putBoolean("watchdog", watchdog).apply();
             held = watchdog; // 1× until the watchdog sees the game hunting
+            toggle.on = watchdog;
+            toggle.invalidate();
             Watchdog.status(watchdog ? "Checking the game…" : "Off");
             applySpeed();
-            paintToggle.run();
         });
-        box.addView(row);
-        box.addView(text(activity, "Logs back in and restarts auto-hunt. Keeps 1× until hunting.", 11, grey));
-        panelStatus = text(activity, "Status: " + Watchdog.status, 12, gold);
-        box.addView(panelStatus);
+        box.addView(dog);
 
-        TextView hide = text(activity, "Hide speed button (sets 1×)", 14, grey);
-        hide.setPadding(0, (int) (10 * dp), 0, 0);
-        hide.setOnClickListener(v -> {
+        // Minimize to a small window (keeps playing) / stop speed (1×, hides the speed button).
+        LinearLayout actions = row(activity);
+        actions.setPadding(0, (int) (12 * dp), 0, (int) (12 * dp));
+        View window = action(activity, Glyph.MINUS, "Minimize Window", "Keeps the game running in a small window.");
+        window.setOnClickListener(v -> { closePanel(activity); Drawer.hide(activity); });
+        View minimize = action(activity, Glyph.STOP, "Stop Speed", "Back to 1× and hides the speed button.");
+        minimize.setOnClickListener(v -> {
             closePanel(activity);
             hidden = true;
             for (Activity a : new ArrayList<>(buttons.keySet())) removeButton(a);
             applySpeed();
         });
-        box.addView(hide);
+        LinearLayout.LayoutParams left = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1);
+        left.rightMargin = (int) (6 * dp);
+        LinearLayout.LayoutParams right = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1);
+        right.leftMargin = (int) (6 * dp);
+        actions.addView(window, left);
+        actions.addView(minimize, right);
+        box.addView(actions);
 
-        TextView drawerButton = text(activity, "Minimize game (keeps playing)", 14, grey);
-        drawerButton.setOnClickListener(v -> { closePanel(activity); Drawer.hide(activity); });
-        box.addView(drawerButton);
+        View rule = new View(activity);
+        rule.setBackgroundColor(0x26FFFFFF);
+        box.addView(rule, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, Math.max(1, (int) dp)));
 
-        box.setOnTouchListener((v, e) -> {
-            // Not the watchdog's own taps on the game, only the player's.
+        // Status: icon, what the watchdog is doing, what it measured.
+        LinearLayout footer = row(activity);
+        footer.setPadding(0, (int) (10 * dp), 0, 0);
+        panelStatusIcon = new Glyph(activity, Glyph.CHECK);
+        footer.addView(panelStatusIcon, size(dp, 26, 26, 0, 10));
+        LinearLayout lines = new LinearLayout(activity);
+        lines.setOrientation(LinearLayout.VERTICAL);
+        panelStatus = label(activity, "", 14, Color.WHITE, false);
+        panelDetail = label(activity, "", 11, SUBTLE, false);
+        lines.addView(panelStatus);
+        lines.addView(panelDetail);
+        footer.addView(lines, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+        box.addView(footer);
+        paintStatus();
+
+        // Scrolls on a short screen; touches outside close it (not the watchdog's own taps on the game).
+        android.widget.ScrollView scroll = new android.widget.ScrollView(activity);
+        scroll.addView(box);
+        scroll.setOnTouchListener((v, e) -> {
             if (e.getActionMasked() == MotionEvent.ACTION_OUTSIDE && SystemClock.uptimeMillis() - Watchdog.tappedAt > 1000)
                 closePanel(activity);
             return false;
         });
         WindowManager.LayoutParams params = windowParams();
         params.flags |= WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH;
-        // Under the button, kept on screen.
-        int screenW = activity.getResources().getDisplayMetrics().widthPixels;
-        int screenH = activity.getResources().getDisplayMetrics().heightPixels;
-        box.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED);
-        params.x = Math.max(0, Math.min(at.x, screenW - box.getMeasuredWidth()));
-        params.y = at.y + button.getHeight() + (int) (6 * dp);
-        if (params.y + box.getMeasuredHeight() > screenH) params.y = Math.max(0, at.y - box.getMeasuredHeight() - (int) (6 * dp));
+        params.gravity = Gravity.CENTER;
+        params.width = (int) Math.min(540 * dp, screenW - 24 * dp);
+        box.measure(View.MeasureSpec.makeMeasureSpec(params.width, View.MeasureSpec.EXACTLY), View.MeasureSpec.UNSPECIFIED);
+        if (box.getMeasuredHeight() > screenH - 16 * dp) params.height = (int) (screenH - 16 * dp);
         try {
-            activity.getWindowManager().addView(box, params);
-            panel = box;
+            activity.getWindowManager().addView(scroll, params);
+            panel = scroll;
         } catch (RuntimeException e) {
             Log.w(TAG, "no settings panel", e);
         }
     }
 
-    private static TextView text(Activity activity, String s, int size, int color) {
-        float dp = dp(activity);
+    // The status lines and their icon: green while hunting, grey when off, amber otherwise.
+    private static void paintStatus() {
+        if (panelStatus == null) return;
+        String status = Watchdog.status;
+        boolean off = !watchdog, good = status.startsWith("Hunting");
+        int color = off ? SUBTLE : good ? GREEN : AMBER;
+        android.text.SpannableString text = new android.text.SpannableString("Status: " + status);
+        text.setSpan(new android.text.style.ForegroundColorSpan(color), 8, text.length(), 0);
+        text.setSpan(new android.text.style.StyleSpan(Typeface.BOLD), 8, text.length(), 0);
+        panelStatus.setText(text);
+        panelDetail.setText(Watchdog.detail);
+        panelDetail.setVisibility(Watchdog.detail.isEmpty() ? View.GONE : View.VISIBLE);
+        panelStatusIcon.kind = good ? Glyph.CHECK : Glyph.WAIT;
+        panelStatusIcon.color = color;
+        panelStatusIcon.invalidate();
+    }
+
+    private static LinearLayout row(Activity activity) {
+        LinearLayout row = new LinearLayout(activity);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        return row;
+    }
+
+    private static LinearLayout.LayoutParams size(float dp, int w, int h, int left, int right) {
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams((int) (w * dp), (int) (h * dp));
+        p.leftMargin = (int) (left * dp);
+        p.rightMargin = (int) (right * dp);
+        return p;
+    }
+
+    private static TextView label(Activity activity, String s, int size, int color, boolean bold) {
         TextView view = new TextView(activity);
         view.setText(s);
         view.setTextSize(size);
         view.setTextColor(color);
-        view.setPadding(0, (int) (6 * dp), 0, (int) (6 * dp));
+        if (bold) view.setTypeface(Typeface.DEFAULT_BOLD);
         return view;
     }
+
+    private static View action(Activity activity, int glyph, String title, String line) {
+        float dp = dp(activity);
+        LinearLayout box = new LinearLayout(activity);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setGravity(Gravity.CENTER);
+        box.setPadding((int) (10 * dp), (int) (10 * dp), (int) (10 * dp), (int) (10 * dp));
+        box.setBackground(tile(dp));
+        LinearLayout top = row(activity);
+        top.setGravity(Gravity.CENTER);
+        top.addView(new Glyph(activity, glyph), size(dp, 26, 26, 0, 10));
+        top.addView(label(activity, title, 16, Color.WHITE, true));
+        box.addView(top);
+        TextView words = label(activity, line, 11, SUBTLE, false);
+        words.setGravity(Gravity.CENTER);
+        box.addView(words);
+        return box;
+    }
+
+    // The card: deep navy with a blue edge and a soft glow around it.
+    private static android.graphics.drawable.Drawable card(float dp) {
+        GradientDrawable glow = new GradientDrawable();
+        glow.setCornerRadius(22 * dp);
+        glow.setColor(0x00000000);
+        glow.setStroke((int) (6 * dp), 0x332F8BFF);
+        GradientDrawable fill = new GradientDrawable(GradientDrawable.Orientation.TL_BR, new int[] {0xF5111C33, 0xF5080E1E});
+        fill.setCornerRadius(20 * dp);
+        fill.setStroke((int) (1.5f * dp), 0xFF3B82F6);
+        android.graphics.drawable.LayerDrawable layers = new android.graphics.drawable.LayerDrawable(
+            new android.graphics.drawable.Drawable[] {glow, fill});
+        int inset = (int) (3 * dp);
+        layers.setLayerInset(1, inset, inset, inset, inset);
+        return layers;
+    }
+
+    private static GradientDrawable tile(float dp) {
+        GradientDrawable tile = new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, new int[] {0xFF18233A, 0xFF111A2D});
+        tile.setCornerRadius(16 * dp);
+        tile.setStroke(Math.max(1, (int) dp), 0x2EFFFFFF);
+        return tile;
+    }
+
+    private static GradientDrawable chip(float dp, boolean picked) {
+        GradientDrawable chip = picked
+            ? new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, new int[] {0xFF2F8BFF, 0xFF0B5BE0})
+            : new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, new int[] {0xFF1A2438, 0xFF131B2C});
+        chip.setCornerRadius(16 * dp);
+        chip.setStroke((int) ((picked ? 2 : 1) * dp), picked ? 0xFF8CC8FF : 0x2EFFFFFF);
+        return chip;
+    }
+
+    /** The panel's small drawings, on a 24×24 grid scaled to the view. */
+    private static final class Glyph extends View {
+        static final int BOLT = 0, SHIELD = 1, STOP = 2, MINUS = 3, CLOSE = 4, CHECK = 5, WAIT = 6, SWITCH = 7;
+        int kind, color = Color.WHITE;
+        boolean on;
+        private final android.graphics.Paint paint = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+        private final android.graphics.Path path = new android.graphics.Path();
+
+        Glyph(Activity activity, int kind) {
+            super(activity);
+            this.kind = kind;
+            if (kind == BOLT || kind == SHIELD) color = BLUE;
+        }
+
+        @Override protected void onDraw(android.graphics.Canvas c) {
+            float w = getWidth(), h = getHeight();
+            if (kind == SWITCH) { drawSwitch(c, w, h); return; }
+            float u = Math.min(w, h) / 24f;
+            c.save();
+            c.translate((w - 24 * u) / 2, (h - 24 * u) / 2);
+            c.scale(u, u);
+            paint.setStrokeCap(android.graphics.Paint.Cap.ROUND);
+            paint.setStrokeJoin(android.graphics.Paint.Join.ROUND);
+            path.reset();
+            switch (kind) {
+            case BOLT:
+                path.moveTo(14, 1); path.lineTo(4, 14); path.lineTo(11, 14); path.lineTo(9.5f, 23);
+                path.lineTo(20, 9.5f); path.lineTo(13, 9.5f); path.close();
+                fill(c, color);
+                break;
+            case SHIELD:
+                path.moveTo(11, 2); path.lineTo(19, 5); path.lineTo(19, 11); path.cubicTo(19, 16, 15.5f, 19.5f, 11, 21.5f);
+                path.cubicTo(6.5f, 19.5f, 3, 16, 3, 11); path.lineTo(3, 5); path.close();
+                fill(c, 0x552F8BFF);
+                stroke(c, color, 1.6f);
+                path.reset(); // the pad
+                path.addRoundRect(6.5f, 9.5f, 15.5f, 14.5f, 2.5f, 2.5f, android.graphics.Path.Direction.CW);
+                fill(c, Color.WHITE);
+                paint.setColor(color);
+                c.drawRect(8.3f, 11.6f, 10.3f, 12.4f, paint);
+                c.drawRect(8.9f, 11f, 9.7f, 13f, paint);
+                c.drawCircle(13.2f, 11.4f, 0.7f, paint);
+                c.drawCircle(13.2f, 13f, 0.7f, paint);
+                paint.setColor(GREEN); // the badge
+                paint.setStyle(android.graphics.Paint.Style.FILL);
+                c.drawCircle(18.5f, 18.5f, 4.5f, paint);
+                path.reset();
+                path.moveTo(16.4f, 18.6f); path.lineTo(18, 20.2f); path.lineTo(20.8f, 17.2f);
+                stroke(c, Color.WHITE, 1.4f);
+                break;
+            case STOP:
+                path.addRoundRect(6, 6, 18, 18, 2.5f, 2.5f, android.graphics.Path.Direction.CW);
+                fill(c, 0xFFFF6B6B);
+                break;
+            case MINUS:
+                path.moveTo(4, 12); path.lineTo(20, 12);
+                stroke(c, color, 2.6f);
+                break;
+            case CLOSE:
+                path.moveTo(6, 6); path.lineTo(18, 18); path.moveTo(18, 6); path.lineTo(6, 18);
+                stroke(c, 0xFFD0D6E0, 2.2f);
+                break;
+            case CHECK:
+            case WAIT:
+                paint.setColor(color);
+                paint.setStyle(android.graphics.Paint.Style.FILL);
+                c.drawCircle(12, 12, 11, paint);
+                if (kind == CHECK) {
+                    path.moveTo(7, 12.5f); path.lineTo(10.5f, 16); path.lineTo(17, 8.5f);
+                    stroke(c, 0xFF08111F, 2.6f);
+                } else {
+                    path.moveTo(12, 6.5f); path.lineTo(12, 12.5f); path.lineTo(15.5f, 15);
+                    stroke(c, 0xFF08111F, 2.2f);
+                }
+                break;
+            default:
+                break;
+            }
+            c.restore();
+        }
+
+        private void drawSwitch(android.graphics.Canvas c, float w, float h) {
+            float r = h / 2;
+            paint.setStyle(android.graphics.Paint.Style.FILL);
+            paint.setColor(on ? 0xFF1E6FFF : 0xFF2A3348);
+            c.drawRoundRect(0, 0, w, h, r, r, paint);
+            paint.setStyle(android.graphics.Paint.Style.STROKE);
+            paint.setStrokeWidth(h / 16);
+            paint.setColor(on ? 0xFF8CC8FF : 0x33FFFFFF);
+            c.drawRoundRect(h / 32, h / 32, w - h / 32, h - h / 32, r, r, paint);
+            paint.setStyle(android.graphics.Paint.Style.FILL);
+            paint.setColor(Color.WHITE);
+            float knob = on ? w - r : r;
+            c.drawCircle(knob, r, r * 0.72f, paint);
+            paint.setTextSize(h * 0.42f);
+            paint.setTypeface(Typeface.DEFAULT_BOLD);
+            paint.setTextAlign(android.graphics.Paint.Align.CENTER);
+            paint.setColor(on ? Color.WHITE : SUBTLE);
+            float textX = on ? (w - 2 * r) / 2 + r * 0.4f : w - (w - 2 * r) / 2 - r * 0.4f;
+            c.drawText(on ? "ON" : "OFF", textX, r + h * 0.15f, paint);
+        }
+
+        private void fill(android.graphics.Canvas c, int color) {
+            paint.setStyle(android.graphics.Paint.Style.FILL);
+            paint.setColor(color);
+            c.drawPath(path, paint);
+        }
+
+        private void stroke(android.graphics.Canvas c, int color, float width) {
+            paint.setStyle(android.graphics.Paint.Style.STROKE);
+            paint.setStrokeWidth(width);
+            paint.setColor(color);
+            c.drawPath(path, paint);
+        }
+    }
+
 
     private static void closePanel(Activity activity) {
         if (panel == null) return;
         try { activity.getWindowManager().removeViewImmediate(panel); } catch (RuntimeException ignored) {}
         panel = null;
         panelStatus = null;
+        panelDetail = null;
+        panelStatusIcon = null;
         panelClosedAt = SystemClock.uptimeMillis();
     }
 
@@ -455,8 +676,7 @@ public final class SpeedOverlay implements Application.ActivityLifecycleCallback
         static void status(String text) {
             if (!text.equals(status)) Log.i(TAG, "watchdog: " + text + " (" + phase + ")");
             status = text;
-            String shown = "Status: " + text + (detail.isEmpty() ? "" : "\n" + detail);
-            main.post(() -> { if (panelStatus != null) panelStatus.setText(shown); });
+            main.post(SpeedOverlay::paintStatus);
         }
 
         private static long huntingSince; // when the game was first seen hunting since the last hold
@@ -578,8 +798,8 @@ public final class SpeedOverlay implements Application.ActivityLifecycleCallback
             saveForDebugging(activity, shot, now);
             shot.recycle();
             detail = String.format(java.util.Locale.ROOT,
-                "Auto-hunt button: %s (match %.2f, edge %d), yellow %d%% (hunting ≥ 50%%) · screen %dx%d%s",
-                hud ? "seen" : "not seen", found[0], shift, (int) (yellow * 100), w, h, tapError.isEmpty() ? "" : " · " + tapError);
+                "Auto-hunt: %s (match %.2f, edge %d) · yellow %d%% (hunting ≥ 50%%) · Screen: %dx%d%s",
+                hud ? "Seen" : "Not seen", found[0], shift, (int) (yellow * 100), w, h, tapError.isEmpty() ? "" : " · " + tapError);
             if (hud) {
                 missingHud = 0;
                 if (yellow >= 0.5f) { // measured: hunting 0.58-0.66 (MuMu and a Fold), not hunting 0.39-0.40
