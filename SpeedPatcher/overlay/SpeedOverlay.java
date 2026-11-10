@@ -403,7 +403,8 @@ public final class SpeedOverlay implements Application.ActivityLifecycleCallback
         static volatile String phase = "", status = "Off";
         static volatile long tappedAt; // last injected tap, which the dropdown must not take as the player's
         private static long lastTap, lastLogin;
-        private static int notHunting, missingHud;
+        private static int notHunting, missingHud, updateSeen;
+        private static final java.util.ArrayDeque<Long> logins = new java.util.ArrayDeque<>();
 
         static void begin() {
             status = watchdog ? "Checking the game…" : "Off";
@@ -469,7 +470,15 @@ public final class SpeedOverlay implements Application.ActivityLifecycleCallback
             if (now - lastLogin > 20000 && clickLogIn(activity)) {
                 lastLogin = now;
                 hold(true);
-                status("Logging in");
+                // Logging in over and over (5 times in 5 minutes) means something is stuck: start over.
+                logins.addLast(now);
+                while (now - logins.peekFirst() > 5 * 60000) logins.removeFirst();
+                if (logins.size() >= 5) {
+                    logins.clear();
+                    relaunch(activity, "Logged in 5 times in 5 minutes");
+                    return;
+                }
+                status("Logging in (" + logins.size() + " of 5 in 5 min)");
                 return;
             }
             if (now - lastTap > 15000 && clickAccountLogin(activity)) {
@@ -503,9 +512,9 @@ public final class SpeedOverlay implements Application.ActivityLifecycleCallback
                     blackSince = now;
                 } else if (now - blackSince >= 20000) {
                     blackSince = 0;
-                    relaunch(activity);
+                    relaunch(activity, "Black screen for 20 s");
                 } else {
-                    status("Black screen " + (now - blackSince) / 1000 + " s (relaunching the game at 20 s)");
+                    status("Black screen " + (now - blackSince) / 1000 + " s (restarting the game at 20 s)");
                 }
                 return;
             }
@@ -530,6 +539,13 @@ public final class SpeedOverlay implements Application.ActivityLifecycleCallback
             float yesX = w / 2f, yesY = h / 2f + 140 * s;
             float yesGold = goldShare(shot, (yesX - 70 * s) * k, (yesY - 18 * s) * k, (yesX + 70 * s) * k, (yesY + 18 * s) * k);
             float sidesDark = darkSides(shot);
+            // "New version detected, update now?" [No] [Yes]: the game's two-button box, gold Yes 114 design px
+            // right of the middle and blue-grey No 130 left, 139 below (measured from a phone screenshot).
+            // The same box style shows game errors in the world, so only off the world (login, start, loading).
+            float boxY = h / 2f + 139 * s;
+            float yesShare = shareOf(shot, (w / 2f + 69 * s) * k, (boxY - 12 * s) * k, (w / 2f + 159 * s) * k, (boxY + 12 * s) * k, true);
+            float noShare = shareOf(shot, (w / 2f - 175 * s) * k, (boxY - 12 * s) * k, (w / 2f - 85 * s) * k, (boxY + 12 * s) * k, false);
+            boolean updateBox = !GAME.equals(phase) && yesShare >= 0.5f && noShare >= 0.5f; // measured 0.85 / 0.89 on it
             int light = meanBrightness(shot);
             saveForDebugging(activity, shot, now);
             shot.recycle();
@@ -571,6 +587,18 @@ public final class SpeedOverlay implements Application.ActivityLifecycleCallback
                 return;
             }
             notHunting = 0;
+            // The update box: twice in a row, then start the game over (it checks for the update again).
+            if (updateBox) {
+                if (++updateSeen >= 2) {
+                    updateSeen = 0;
+                    relaunch(activity, "Update box");
+                } else {
+                    hold(true);
+                    status("Update box?");
+                }
+                return;
+            }
+            updateSeen = 0;
             float skipArea = 105 * s * k * 33 * s * k;
             boolean disconnected = yesGold >= 0.4f && sidesDark >= 0.9f; // measured: 0.62 / 1.0 on it; sand ~0.57 / 0.0
             boolean prompt = GAME.equals(phase) && light < 60 && skip >= skipArea * 0.018;
@@ -609,11 +637,11 @@ public final class SpeedOverlay implements Application.ActivityLifecycleCallback
 
         // Start the game over: a fresh task for its launcher activity, then end this (frozen) process.
         // Allowed because the game is in front; Android starts the new activity in a new process.
-        private static void relaunch(Activity activity) {
+        private static void relaunch(Activity activity, String why) {
             Intent launch = activity.getPackageManager().getLaunchIntentForPackage(activity.getPackageName());
             if (launch == null || launch.getComponent() == null) return;
-            status("Black screen for 20 s: relaunching the game");
-            Log.i(TAG, "watchdog: relaunching the game after 20 s of black screen");
+            status(why + ": restarting the game");
+            Log.i(TAG, "watchdog: restarting the game (" + why + ")");
             Intent restart = Intent.makeRestartActivityTask(launch.getComponent());
             main.post(() -> {
                 activity.startActivity(restart);
@@ -880,6 +908,19 @@ public final class SpeedOverlay implements Application.ActivityLifecycleCallback
             } catch (java.io.IOException | RuntimeException e) {
                 Log.w(TAG, "can't save watchdog.png", e);
             }
+        }
+
+        /** Share of a box in the game's gold button colour (gold) or its blue-grey button colour (not gold). */
+        static float shareOf(Bitmap shot, float x0, float y0, float x1, float y1, boolean gold) {
+            int hit = 0, all = 0;
+            for (int y = Math.max(0, (int) y0); y < Math.min(shot.getHeight(), y1); y++) {
+                for (int x = Math.max(0, (int) x0); x < Math.min(shot.getWidth(), x1); x++) {
+                    int c = shot.getPixel(x, y), r = Color.red(c), g = Color.green(c), b = Color.blue(c);
+                    all++;
+                    if (gold ? r > 160 && g > 140 && b < 150 && r - b > 40 : b > 140 && g > 130 && b - r > 15) hit++;
+                }
+            }
+            return all == 0 ? 0 : hit / (float) all;
         }
 
         /** Average brightness (0-255) of the picture. */
