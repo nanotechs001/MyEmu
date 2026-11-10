@@ -2,8 +2,8 @@ package com.myemu.speed;
 
 import android.app.Activity;
 import android.content.Context;
-import android.net.Uri;
-import android.provider.Settings;
+import android.app.PictureInPictureParams;
+import android.util.Rational;
 import android.widget.Toast;
 import android.app.Application;
 import android.app.Instrumentation;
@@ -310,7 +310,7 @@ public final class SpeedOverlay implements Application.ActivityLifecycleCallback
         });
         box.addView(hide);
 
-        TextView drawerButton = text(activity, "Hide game in drawer (keeps playing)", 14, grey);
+        TextView drawerButton = text(activity, "Minimize game (keeps playing)", 14, grey);
         drawerButton.setOnClickListener(v -> { closePanel(activity); Drawer.hide(activity); });
         box.addView(drawerButton);
 
@@ -483,7 +483,7 @@ public final class SpeedOverlay implements Application.ActivityLifecycleCallback
 
         private static void tick() {
             Activity activity = resumed;
-            if (activity == null) return;
+            if (activity == null || Drawer.isSmall(activity)) return; // small: Drawer.check follows the log
             long now = SystemClock.uptimeMillis();
             if (now - lastLogin > 20000 && clickLogIn(activity)) {
                 lastLogin = now;
@@ -795,7 +795,7 @@ public final class SpeedOverlay implements Application.ActivityLifecycleCallback
             return new ArrayList<>((List<View>) views.get(instance));
         }
 
-        private static SurfaceView findSurface(View view) {
+        static SurfaceView findSurface(View view) {
             if (view instanceof SurfaceView && view.isShown()) return (SurfaceView) view;
             if (view instanceof ViewGroup) {
                 ViewGroup group = (ViewGroup) view;
@@ -1048,10 +1048,15 @@ public final class SpeedOverlay implements Application.ActivityLifecycleCallback
 
     @Override public void onActivityResumed(Activity activity) {
         resumed = activity;
-        if (Drawer.open && !Drawer.woken) Drawer.close(); // back from the launcher or recents
+        Drawer.resumed();
         addButton(activity);
     }
     @Override public void onActivityPaused(Activity activity) {
+        if (Drawer.isSmall(activity)) { // shrunk to the floating window: still on screen, keep it going
+            closePanel(activity);
+            Drawer.keepPlaying(activity);
+            return;
+        }
         if (resumed == activity) resumed = null;
         closePanel(activity);
     }
@@ -1064,54 +1069,64 @@ public final class SpeedOverlay implements Application.ActivityLifecycleCallback
     }
 
     /**
-     * The drawer: the game hides behind a small tab on the screen's edge and plays on. Android leaves
-     * an app with a window on screen (the tab) running; the game keeps fighting without drawing.
-     * Tap the tab: the game again. Hidden, the watchdog can't see the game, so it follows the game's
-     * log: when the game drops out of the world (or every 10 minutes, to check auto-hunt) it brings
-     * the game back, puts it right, and hides it again once it's hunting at the chosen speed.
+     * The drawer: the game shrinks to Android's picture-in-picture window, which floats over other
+     * apps and can be pushed to the screen's edge (tap it there to bring it back). The game is still
+     * on screen, so it keeps its picture and its engine keeps running: it draws (and so plays) on its
+     * GL thread, which the game pauses with its activity; that's resumed here. Tap the window to get
+     * the game back. In the small window the watchdog doesn't read the screen; it follows the game's
+     * log: when the game drops out of the world (or every 10 minutes, to check auto-hunt) it brings the
+     * game back full screen, puts it right, and shrinks it again once it's hunting at the chosen speed.
      */
     static final class Drawer {
         private static final long CHECK_EVERY = 10 * 60000;
-        static volatile boolean open;  // the player put the game in the drawer
-        static volatile boolean woken; // the watchdog brought it out to fix something
+        static volatile boolean woken; // the watchdog brought it back to fix something
+        private static volatile Activity small; // the game, while shrunk by the player
         private static volatile long hiddenAt;
-        private static TextView tab;
+
+        static boolean isSmall(Activity activity) {
+            return activity != null && activity.isInPictureInPictureMode();
+        }
 
         static void hide(Activity activity) {
-            if (!Settings.canDrawOverlays(activity)) {
-                Toast.makeText(activity, "Allow \"Display over other apps\" for Xerion, then hide it again", Toast.LENGTH_LONG).show();
-                try {
-                    activity.startActivity(new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                        Uri.parse("package:" + activity.getPackageName())));
-                } catch (RuntimeException e) {
-                    Log.w(TAG, "no overlay settings screen", e);
-                }
-                return;
-            }
-            open = true;
-            woken = false;
             closePanel(activity);
-            toBack(activity);
+            try {
+                if (!activity.enterPictureInPictureMode(new PictureInPictureParams.Builder()
+                        .setAspectRatio(new Rational(16, 9)).build())) throw new IllegalStateException("refused");
+                small = activity;
+                woken = false;
+                hiddenAt = SystemClock.uptimeMillis();
+                Log.i(TAG, "drawer: game shrunk");
+            } catch (RuntimeException e) {
+                Log.w(TAG, "drawer: no picture-in-picture", e);
+                Toast.makeText(activity, "Can't minimize: open the Speed Patcher and tap Update speed patch", Toast.LENGTH_LONG).show();
+            }
         }
 
-        private static void toBack(Activity activity) {
-            showTab(activity.getApplicationContext());
-            activity.moveTaskToBack(true);
-            hiddenAt = SystemClock.uptimeMillis();
-            Log.i(TAG, "drawer: game hidden");
+        // The game paused itself (and its GL thread) on shrinking: keep it drawing, and so playing.
+        static void keepPlaying(Activity activity) {
+            main.postDelayed(() -> {
+                if (!isSmall(activity)) return;
+                TextView button = buttons.get(activity); // it would cover the small window; back on resume
+                if (button != null) button.setVisibility(View.GONE);
+                SurfaceView view = Watchdog.findSurface(activity.getWindow().getDecorView());
+                try { // C3DemoGLSurfaceView: the engine's own GL view, paused and resumed like GLSurfaceView
+                    view.getClass().getMethod("onResume").invoke(view);
+                    Log.i(TAG, "drawer: game kept running");
+                } catch (Throwable t) {
+                    Log.w(TAG, "drawer: can't keep the game running: " + view, t);
+                }
+            }, 300);
         }
 
-        // The player is back in the game (the tab, the launcher, recents).
-        static void close() {
-            open = false;
-            woken = false;
-            main.post(Drawer::removeTab);
+        // Back full screen: by the player (the drawer is done) or by the watchdog (it shrinks it again).
+        static void resumed() {
+            if (!woken) small = null;
         }
 
         private static void bringBack(Context app) {
             Intent launch = app.getPackageManager().getLaunchIntentForPackage(app.getPackageName());
             if (launch == null) return;
-            launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK); // the running game's task, brought to the front
+            launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK); // the running game's task, full screen again
             try {
                 app.startActivity(launch);
             } catch (RuntimeException e) {
@@ -1121,100 +1136,26 @@ public final class SpeedOverlay implements Application.ActivityLifecycleCallback
 
         // Watchdog thread, every 3 s.
         static void check() {
-            if (!open || woken || resumed != null) return;
+            if (woken || !isSmall(small)) return;
             String phase = Watchdog.phase;
             boolean out = !phase.isEmpty() && !Watchdog.GAME.equals(phase);
             if (!out && SystemClock.uptimeMillis() - hiddenAt < CHECK_EVERY) return;
             woken = true;
-            Watchdog.status(out ? "Out of the game: bringing it back from the drawer" : "Checking auto-hunt (from the drawer)");
-            main.post(() -> {
-                removeTab();
-                bringBack(application);
-            });
+            Watchdog.status(out ? "Out of the game: bringing it back full screen" : "Checking auto-hunt (full screen for a moment)");
+            main.post(() -> bringBack(application));
         }
 
-        // Watchdog: hunting at the chosen speed again, so back into the drawer if it came out for that.
+        // Watchdog: hunting at the chosen speed again, so small again if it came back for that.
         // Not while the log says it's logging in: after a drop the world stays on screen a few seconds.
         static void fixed() {
             String phase = Watchdog.phase;
-            if (!open || !woken || !phase.isEmpty() && !Watchdog.GAME.equals(phase)) return;
+            if (!woken || small == null || !phase.isEmpty() && !Watchdog.GAME.equals(phase)) return;
             main.post(() -> {
                 Activity activity = resumed;
-                if (activity == null || !woken) return;
+                if (activity == null || !woken || isSmall(activity)) return;
                 woken = false;
-                toBack(activity);
+                hide(activity);
             });
-        }
-
-        private static void showTab(Context app) {
-            removeTab();
-            float dp = app.getResources().getDisplayMetrics().density;
-            WindowManager wm = (WindowManager) app.getSystemService(Context.WINDOW_SERVICE);
-            TextView view = new TextView(app);
-            view.setText("◀ Xerion " + label());
-            view.setTextColor(Color.WHITE);
-            view.setTextSize(13);
-            view.setTypeface(Typeface.DEFAULT_BOLD);
-            view.setGravity(Gravity.CENTER);
-            view.setMinHeight((int) (40 * dp));
-            view.setPadding((int) (12 * dp), 0, (int) (10 * dp), 0);
-            view.setBackground(background(dp, 14));
-            WindowManager.LayoutParams params = new WindowManager.LayoutParams(
-                WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT,
-                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, PixelFormat.TRANSLUCENT);
-            params.gravity = Gravity.TOP | Gravity.END;
-            params.y = (int) prefs.getFloat("tabY", 120 * dp);
-            // Tap: the game; drag: up or down the edge.
-            view.setOnTouchListener(new View.OnTouchListener() {
-                float downY;
-                int startY;
-                boolean dragging;
-
-                @Override public boolean onTouch(View v, MotionEvent e) {
-                    switch (e.getActionMasked()) {
-                    case MotionEvent.ACTION_DOWN:
-                        downY = e.getRawY();
-                        startY = params.y;
-                        dragging = false;
-                        return true;
-                    case MotionEvent.ACTION_MOVE:
-                        float dy = e.getRawY() - downY;
-                        if (Math.abs(dy) > 10 * dp) dragging = true;
-                        if (dragging) {
-                            int height = v.getResources().getDisplayMetrics().heightPixels;
-                            params.y = (int) Math.max(0, Math.min(startY + dy, height - v.getHeight()));
-                            wm.updateViewLayout(v, params);
-                        }
-                        return true;
-                    case MotionEvent.ACTION_UP:
-                        if (dragging) {
-                            prefs.edit().putFloat("tabY", params.y).apply();
-                        } else {
-                            close();
-                            bringBack(app);
-                        }
-                        return true;
-                    default:
-                        return false;
-                    }
-                }
-            });
-            try {
-                wm.addView(view, params);
-                tab = view;
-            } catch (RuntimeException e) {
-                Log.w(TAG, "drawer: no tab", e);
-            }
-        }
-
-        private static void removeTab() {
-            TextView old = tab;
-            tab = null;
-            if (old == null) return;
-            try {
-                ((WindowManager) old.getContext().getSystemService(Context.WINDOW_SERVICE)).removeViewImmediate(old);
-            } catch (RuntimeException ignored) {}
         }
     }
 }

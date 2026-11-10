@@ -9,22 +9,22 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Adds uses-permission SYSTEM_ALERT_WINDOW to Xerion's compiled (binary) AndroidManifest.xml: the
- * drawer's tab floats over other apps while the game is hidden. The permission's name goes to the
- * end of the string pool; nothing else moves.
+ * Adds android:supportsPictureInPicture="true" to every activity in Xerion's compiled (binary)
+ * AndroidManifest.xml, for the drawer: the game shrinks to a floating window (which can be pushed to
+ * the screen's edge) and keeps playing, since it stays on screen. The attribute's name goes to the
+ * end of the string pool and the resource map is padded with 0 (no resource) up to it; attributes
+ * stay sorted by resource id, as Android expects.
  */
 final class AxmlEdit {
-    private static final int RES_XML = 0x0003, STRING_POOL = 0x0001, RESOURCE_MAP = 0x0180;
-    private static final int START_ELEMENT = 0x0102, END_ELEMENT = 0x0103;
+    private static final int RES_XML = 0x0003, STRING_POOL = 0x0001, RESOURCE_MAP = 0x0180, START_ELEMENT = 0x0102;
     private static final int UTF8 = 0x100;
-    private static final int ATTR_NAME = 0x01010003;
-    private static final int TYPE_STRING = 0x03;
+    private static final int ATTR_PIP = 0x010104F7, TYPE_BOOLEAN = 0x12;
     private static final String ANDROID = "http://schemas.android.com/apk/res/android";
-    static final String OVERLAY = "android.permission.SYSTEM_ALERT_WINDOW";
 
     private AxmlEdit() {}
 
-    static byte[] allowOverlay(byte[] manifest) throws IOException {
+    /** The manifest with picture-in-picture allowed; the same array if it already was. */
+    static byte[] allowPip(byte[] manifest) throws IOException {
         ByteBuffer in = ByteBuffer.wrap(manifest).order(ByteOrder.LITTLE_ENDIAN);
         if (in.getShort(0) != RES_XML || in.getShort(8) != STRING_POOL) throw new IOException("unexpected manifest format");
         int poolSize = in.getInt(12);
@@ -42,30 +42,37 @@ final class AxmlEdit {
         int[] ids = new int[(m.capacity() - 8) / 4];
         for (int i = 0; i < ids.length; i++) ids[i] = m.getInt(8 + 4 * i);
         int ns = strings.indexOf(ANDROID);
-        int usesPermission = strings.indexOf("uses-permission"), name = -1;
-        for (int i = 0; i < ids.length; i++) if (ids[i] == ATTR_NAME) name = i;
-        if (ns < 0 || usesPermission < 0 || name < 0) throw new IOException("unexpected manifest contents");
+        if (ns < 0) throw new IOException("unexpected manifest contents");
 
-        boolean hasOverlay = false;
-        int manifestElement = -1;
+        int pip = -1; // the attribute's name string, added on first use
         for (int i = 0; i < chunks.size(); i++) {
             if (type(chunks.get(i)) != START_ELEMENT) continue;
             ByteBuffer c = le(chunks.get(i));
-            String element = strings.get(c.getInt(20));
-            if (element.equals("manifest")) manifestElement = i;
-            int count = c.getShort(28) & 0xffff;
-            if (element.equals("uses-permission")) {
-                for (int a = 0; a < count; a++)
-                    if (attrId(c, a, ids) == ATTR_NAME && (c.get(36 + 20 * a + 15) & 0xff) == TYPE_STRING
-                            && OVERLAY.equals(strings.get(c.getInt(36 + 20 * a + 16)))) hasOverlay = true;
+            if (!strings.get(c.getInt(20)).equals("activity")) continue;
+            int count = c.getShort(28) & 0xffff, insert = count;
+            boolean has = false;
+            for (int a = 0; a < count; a++) {
+                int name = c.getInt(36 + 20 * a + 4);
+                int id = name >= 0 && name < ids.length ? ids[name] : 0;
+                if (id == ATTR_PIP) has = true;
+                if (insert == count && (id == 0 || id > ATTR_PIP)) insert = a;
             }
+            if (has) continue;
+            if (pip < 0) {
+                pip = strings.size();
+                strings.add("supportsPictureInPicture");
+            }
+            chunks.set(i, withAttribute(chunks.get(i), insert, ns, pip));
         }
-        if (hasOverlay) return manifest;
-        if (manifestElement < 0) throw new IOException("the manifest has no manifest element");
-        int value = strings.size();
-        strings.add(OVERLAY);
-        chunks.add(manifestElement + 1, endElement(usesPermission));
-        chunks.add(manifestElement + 1, permission(usesPermission, ns, name, value));
+        if (pip < 0) return manifest;
+        int[] longer = new int[Math.max(ids.length, pip + 1)]; // the strings in between map to 0: no resource, as before
+        System.arraycopy(ids, 0, longer, 0, ids.length);
+        longer[pip] = ATTR_PIP;
+        ByteBuffer newMap = ByteBuffer.allocate(8 + 4 * longer.length).order(ByteOrder.LITTLE_ENDIAN);
+        newMap.putShort((short) RESOURCE_MAP).putShort((short) 8).putInt(newMap.capacity());
+        for (int id : longer) newMap.putInt(id);
+        chunks.set(map, newMap.array());
+
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         byte[] pool = writePool(in, 8, strings);
         int size = 8 + pool.length;
@@ -88,24 +95,21 @@ final class AxmlEdit {
 
     // Start-element layout: 16-byte header, then ns, name, attributeStart(2)=20, attributeSize(2)=20,
     // count(2), id/class/style index(2 each, 1-based), then 20-byte attributes from offset 36.
-    private static int attrId(ByteBuffer c, int a, int[] ids) {
-        int nameIndex = c.getInt(36 + 20 * a + 4);
-        return nameIndex >= 0 && nameIndex < ids.length ? ids[nameIndex] : 0;
-    }
-
-    private static byte[] permission(int element, int ns, int name, int value) {
-        ByteBuffer o = ByteBuffer.allocate(56).order(ByteOrder.LITTLE_ENDIAN);
-        o.putShort((short) START_ELEMENT).putShort((short) 16).putInt(56).putInt(1).putInt(-1);
-        o.putInt(-1).putInt(element).putShort((short) 20).putShort((short) 20).putShort((short) 1)
-            .putShort((short) 0).putShort((short) 0).putShort((short) 0);
-        o.putInt(ns).putInt(name).putInt(value).putShort((short) 8).put((byte) 0).put((byte) TYPE_STRING).putInt(value);
-        return o.array();
-    }
-
-    private static byte[] endElement(int element) {
-        ByteBuffer o = ByteBuffer.allocate(24).order(ByteOrder.LITTLE_ENDIAN);
-        o.putShort((short) END_ELEMENT).putShort((short) 16).putInt(24).putInt(1).putInt(-1).putInt(-1).putInt(element);
-        return o.array();
+    private static byte[] withAttribute(byte[] chunk, int insert, int ns, int name) {
+        int at = 36 + 20 * insert;
+        byte[] out = new byte[chunk.length + 20];
+        System.arraycopy(chunk, 0, out, 0, at);
+        System.arraycopy(chunk, at, out, at + 20, chunk.length - at);
+        ByteBuffer o = le(out);
+        o.putInt(4, out.length);
+        o.putShort(28, (short) ((o.getShort(28) & 0xffff) + 1));
+        for (int f = 30; f <= 34; f += 2) { // id/class/style attribute indexes after the insert move up one
+            int index = o.getShort(f) & 0xffff;
+            if (index > insert) o.putShort(f, (short) (index + 1));
+        }
+        o.putInt(at, ns).putInt(at + 4, name).putInt(at + 8, -1)
+            .putShort(at + 12, (short) 8).put(at + 14, (byte) 0).put(at + 15, (byte) TYPE_BOOLEAN).putInt(at + 16, -1);
+        return out;
     }
 
     private static List<String> readPool(ByteBuffer in, int pool) throws IOException {

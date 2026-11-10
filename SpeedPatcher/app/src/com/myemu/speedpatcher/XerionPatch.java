@@ -75,7 +75,7 @@ public final class XerionPatch {
                 any = true;
             }
             byte[] manifest = read(zip.getInputStream(zip.getEntry("AndroidManifest.xml")));
-            if (AxmlEdit.allowOverlay(manifest) != manifest) return false; // patched before the drawer (no overlay permission)
+            if (AxmlEdit.allowPip(manifest) != manifest) return false; // patched before the drawer (no picture-in-picture)
         }
         return any;
     }
@@ -101,7 +101,7 @@ public final class XerionPatch {
                 }
                 if (name.equals("AndroidManifest.xml")) {
                     try (InputStream data = in.getInputStream(entry)) {
-                        put(zip, name, AxmlEdit.allowOverlay(read(data)), entry.getMethod());
+                        put(zip, name, AxmlEdit.allowPip(read(data)), entry.getMethod());
                     }
                     continue;
                 }
