@@ -403,6 +403,7 @@ public final class SpeedOverlay implements Application.ActivityLifecycleCallback
         static volatile String phase = "", status = "Off";
         static volatile long tappedAt; // last injected tap, which the dropdown must not take as the player's
         private static long lastTap, lastLogin;
+        private static long lastMessage;
         private static int notHunting, missingHud, updateSeen;
         private static final java.util.ArrayDeque<Long> logins = new java.util.ArrayDeque<>();
 
@@ -479,6 +480,13 @@ public final class SpeedOverlay implements Application.ActivityLifecycleCallback
                     return;
                 }
                 status("Logging in (" + logins.size() + " of 5 in 5 min)");
+                return;
+            }
+            if (now - lastMessage > 5000 && clickMessageOk(activity)) { // e.g. Connection failed: OK, then log in again
+                lastMessage = now;
+                phase = LOGIN;
+                hold(true);
+                status("Pressing OK on a message");
                 return;
             }
             if (now - lastTap > 15000 && clickAccountLogin(activity)) {
@@ -718,17 +726,25 @@ public final class SpeedOverlay implements Application.ActivityLifecycleCallback
         //    box's version label), with the saved account;
         //  - the screen behind it: Xerion Login (opens the box).
         private static boolean clickLogIn(Activity activity) {
-            return clickById(activity, "nd_tv_confirm_btn_confirm", "nd_login_tv_version");
+            return clickById(activity, "nd_tv_confirm_btn_confirm", "nd_login_tv_version", null);
         }
 
         private static boolean clickAccountLogin(Activity activity) {
-            return clickById(activity, "nd_other_account_login", null);
+            return clickById(activity, "nd_other_account_login", null, null);
         }
 
-        private static boolean clickById(Activity activity, String button, String alongside) {
+        // The SDK's message boxes ("Conquer · Connection failed · OK", seen on a Galaxy Z Fold): the same
+        // confirm button under the SDK's dialog title, in a window that isn't the account box.
+        private static boolean clickMessageOk(Activity activity) {
+            return clickById(activity, "nd_tv_confirm_btn_confirm", "nd_tv_dialog_title", "nd_login_tv_version");
+        }
+
+        /** Clicks `button` in the first window that shows it, has `alongside` (if given) and not `without`. */
+        private static boolean clickById(Activity activity, String button, String alongside, String without) {
             android.content.res.Resources res = activity.getResources();
             int id = res.getIdentifier(button, "id", activity.getPackageName());
             int with = alongside == null ? 0 : res.getIdentifier(alongside, "id", activity.getPackageName());
+            int not = without == null ? 0 : res.getIdentifier(without, "id", activity.getPackageName());
             if (id == 0 || (alongside != null && with == 0)) return false;
             boolean[] clicked = {false};
             CountDownLatch done = new CountDownLatch(1);
@@ -736,7 +752,8 @@ public final class SpeedOverlay implements Application.ActivityLifecycleCallback
                 try {
                     for (View root : rootViews()) {
                         View view = root.findViewById(id);
-                        if (view != null && view.isShown() && (with == 0 || root.findViewById(with) != null)) {
+                        if (view != null && view.isShown() && (with == 0 || root.findViewById(with) != null)
+                                && (not == 0 || root.findViewById(not) == null)) {
                             clicked[0] = view.performClick();
                             break;
                         }
