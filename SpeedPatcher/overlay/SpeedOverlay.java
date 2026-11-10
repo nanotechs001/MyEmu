@@ -1,6 +1,10 @@
 package com.myemu.speed;
 
 import android.app.Activity;
+import android.content.Context;
+import android.net.Uri;
+import android.provider.Settings;
+import android.widget.Toast;
 import android.app.Application;
 import android.app.Instrumentation;
 import android.content.Intent;
@@ -57,6 +61,7 @@ public final class SpeedOverlay implements Application.ActivityLifecycleCallback
     private static final Map<Activity, TextView> buttons = new WeakHashMap<>();
     private static final Handler main = new Handler(Looper.getMainLooper());
     private static SharedPreferences prefs;
+    private static Application application;
     private static int index;
     private static boolean hidden;
     private static volatile boolean watchdog, held;
@@ -72,6 +77,7 @@ public final class SpeedOverlay implements Application.ActivityLifecycleCallback
         try {
             Class<?> thread = Class.forName("android.app.ActivityThread");
             Application app = (Application) thread.getMethod("currentApplication").invoke(null);
+            application = app;
             prefs = app.getSharedPreferences(TAG, 0);
             index = Math.min(Math.max(prefs.getInt("index", 0), 0), SPEEDS.length - 1);
             watchdog = prefs.getBoolean("watchdog", false);
@@ -304,6 +310,10 @@ public final class SpeedOverlay implements Application.ActivityLifecycleCallback
         });
         box.addView(hide);
 
+        TextView drawerButton = text(activity, "Hide game in drawer (keeps playing)", 14, grey);
+        drawerButton.setOnClickListener(v -> { closePanel(activity); Drawer.hide(activity); });
+        box.addView(drawerButton);
+
         box.setOnTouchListener((v, e) -> {
             // Not the watchdog's own taps on the game, only the player's.
             if (e.getActionMasked() == MotionEvent.ACTION_OUTSIDE && SystemClock.uptimeMillis() - Watchdog.tappedAt > 1000)
@@ -385,7 +395,13 @@ public final class SpeedOverlay implements Application.ActivityLifecycleCallback
                 return true;
             case MotionEvent.ACTION_UP:
                 touching = false;
-                if (dragging) prefs.edit().putFloat("x", params.x).putFloat("y", params.y).apply();
+                int edge = (int) (8 * dp(activity)), width = v.getResources().getDisplayMetrics().widthPixels;
+                if (dragging && (e.getRawX() < edge || e.getRawX() > width - edge)) {
+                    // Pushed off the side: into the drawer (the button goes back where it was).
+                    params.x = startX; params.y = startY;
+                    activity.getWindowManager().updateViewLayout(v, params);
+                    Drawer.hide(activity);
+                } else if (dragging) prefs.edit().putFloat("x", params.x).putFloat("y", params.y).apply();
                 else togglePanel(activity, v, params);
                 return true;
             case MotionEvent.ACTION_CANCEL:
@@ -399,7 +415,7 @@ public final class SpeedOverlay implements Application.ActivityLifecycleCallback
 
     /** Checks the game every few seconds while on; see the class comment. */
     private static final class Watchdog {
-        private static final String LOGIN = "login", SERVER = "server", ENTERING = "entering", GAME = "game";
+        static final String LOGIN = "login", SERVER = "server", ENTERING = "entering", GAME = "game";
         static volatile String phase = "", status = "Off";
         static volatile long tappedAt; // last injected tap, which the dropdown must not take as the player's
         private static long lastTap, lastLogin;
@@ -416,6 +432,7 @@ public final class SpeedOverlay implements Application.ActivityLifecycleCallback
                     try {
                         main.post(SpeedOverlay::raiseButton);
                         if (watchdog && !hidden) tick();
+                        if (watchdog) Drawer.check();
                     } catch (Throwable t) {
                         Log.w(TAG, "watchdog", t);
                     }
@@ -570,6 +587,7 @@ public final class SpeedOverlay implements Application.ActivityLifecycleCallback
                     if (!held || wait <= 0) {
                         hold(false);
                         status("Hunting");
+                        Drawer.fixed();
                     } else {
                         status("Hunting: " + label() + " in " + (wait + 999) / 1000 + " s");
                     }
@@ -1030,6 +1048,7 @@ public final class SpeedOverlay implements Application.ActivityLifecycleCallback
 
     @Override public void onActivityResumed(Activity activity) {
         resumed = activity;
+        if (Drawer.open && !Drawer.woken) Drawer.close(); // back from the launcher or recents
         addButton(activity);
     }
     @Override public void onActivityPaused(Activity activity) {
@@ -1042,5 +1061,160 @@ public final class SpeedOverlay implements Application.ActivityLifecycleCallback
     @Override public void onActivitySaveInstanceState(Activity activity, Bundle state) {}
     @Override public void onActivityDestroyed(Activity activity) {
         removeButton(activity);
+    }
+
+    /**
+     * The drawer: the game hides behind a small tab on the screen's edge and plays on. Android leaves
+     * an app with a window on screen (the tab) running; the game keeps fighting without drawing.
+     * Tap the tab: the game again. Hidden, the watchdog can't see the game, so it follows the game's
+     * log: when the game drops out of the world (or every 10 minutes, to check auto-hunt) it brings
+     * the game back, puts it right, and hides it again once it's hunting at the chosen speed.
+     */
+    static final class Drawer {
+        private static final long CHECK_EVERY = 10 * 60000;
+        static volatile boolean open;  // the player put the game in the drawer
+        static volatile boolean woken; // the watchdog brought it out to fix something
+        private static volatile long hiddenAt;
+        private static TextView tab;
+
+        static void hide(Activity activity) {
+            if (!Settings.canDrawOverlays(activity)) {
+                Toast.makeText(activity, "Allow \"Display over other apps\" for Xerion, then hide it again", Toast.LENGTH_LONG).show();
+                try {
+                    activity.startActivity(new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        Uri.parse("package:" + activity.getPackageName())));
+                } catch (RuntimeException e) {
+                    Log.w(TAG, "no overlay settings screen", e);
+                }
+                return;
+            }
+            open = true;
+            woken = false;
+            closePanel(activity);
+            toBack(activity);
+        }
+
+        private static void toBack(Activity activity) {
+            showTab(activity.getApplicationContext());
+            activity.moveTaskToBack(true);
+            hiddenAt = SystemClock.uptimeMillis();
+            Log.i(TAG, "drawer: game hidden");
+        }
+
+        // The player is back in the game (the tab, the launcher, recents).
+        static void close() {
+            open = false;
+            woken = false;
+            main.post(Drawer::removeTab);
+        }
+
+        private static void bringBack(Context app) {
+            Intent launch = app.getPackageManager().getLaunchIntentForPackage(app.getPackageName());
+            if (launch == null) return;
+            launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK); // the running game's task, brought to the front
+            try {
+                app.startActivity(launch);
+            } catch (RuntimeException e) {
+                Log.w(TAG, "drawer: can't bring the game back", e);
+            }
+        }
+
+        // Watchdog thread, every 3 s.
+        static void check() {
+            if (!open || woken || resumed != null) return;
+            String phase = Watchdog.phase;
+            boolean out = !phase.isEmpty() && !Watchdog.GAME.equals(phase);
+            if (!out && SystemClock.uptimeMillis() - hiddenAt < CHECK_EVERY) return;
+            woken = true;
+            Watchdog.status(out ? "Out of the game: bringing it back from the drawer" : "Checking auto-hunt (from the drawer)");
+            main.post(() -> {
+                removeTab();
+                bringBack(application);
+            });
+        }
+
+        // Watchdog: hunting at the chosen speed again, so back into the drawer if it came out for that.
+        // Not while the log says it's logging in: after a drop the world stays on screen a few seconds.
+        static void fixed() {
+            String phase = Watchdog.phase;
+            if (!open || !woken || !phase.isEmpty() && !Watchdog.GAME.equals(phase)) return;
+            main.post(() -> {
+                Activity activity = resumed;
+                if (activity == null || !woken) return;
+                woken = false;
+                toBack(activity);
+            });
+        }
+
+        private static void showTab(Context app) {
+            removeTab();
+            float dp = app.getResources().getDisplayMetrics().density;
+            WindowManager wm = (WindowManager) app.getSystemService(Context.WINDOW_SERVICE);
+            TextView view = new TextView(app);
+            view.setText("◀ Xerion " + label());
+            view.setTextColor(Color.WHITE);
+            view.setTextSize(13);
+            view.setTypeface(Typeface.DEFAULT_BOLD);
+            view.setGravity(Gravity.CENTER);
+            view.setMinHeight((int) (40 * dp));
+            view.setPadding((int) (12 * dp), 0, (int) (10 * dp), 0);
+            view.setBackground(background(dp, 14));
+            WindowManager.LayoutParams params = new WindowManager.LayoutParams(
+                WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT,
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, PixelFormat.TRANSLUCENT);
+            params.gravity = Gravity.TOP | Gravity.END;
+            params.y = (int) prefs.getFloat("tabY", 120 * dp);
+            // Tap: the game; drag: up or down the edge.
+            view.setOnTouchListener(new View.OnTouchListener() {
+                float downY;
+                int startY;
+                boolean dragging;
+
+                @Override public boolean onTouch(View v, MotionEvent e) {
+                    switch (e.getActionMasked()) {
+                    case MotionEvent.ACTION_DOWN:
+                        downY = e.getRawY();
+                        startY = params.y;
+                        dragging = false;
+                        return true;
+                    case MotionEvent.ACTION_MOVE:
+                        float dy = e.getRawY() - downY;
+                        if (Math.abs(dy) > 10 * dp) dragging = true;
+                        if (dragging) {
+                            int height = v.getResources().getDisplayMetrics().heightPixels;
+                            params.y = (int) Math.max(0, Math.min(startY + dy, height - v.getHeight()));
+                            wm.updateViewLayout(v, params);
+                        }
+                        return true;
+                    case MotionEvent.ACTION_UP:
+                        if (dragging) {
+                            prefs.edit().putFloat("tabY", params.y).apply();
+                        } else {
+                            close();
+                            bringBack(app);
+                        }
+                        return true;
+                    default:
+                        return false;
+                    }
+                }
+            });
+            try {
+                wm.addView(view, params);
+                tab = view;
+            } catch (RuntimeException e) {
+                Log.w(TAG, "drawer: no tab", e);
+            }
+        }
+
+        private static void removeTab() {
+            TextView old = tab;
+            tab = null;
+            if (old == null) return;
+            try {
+                ((WindowManager) old.getContext().getSystemService(Context.WINDOW_SERVICE)).removeViewImmediate(old);
+            } catch (RuntimeException ignored) {}
+        }
     }
 }

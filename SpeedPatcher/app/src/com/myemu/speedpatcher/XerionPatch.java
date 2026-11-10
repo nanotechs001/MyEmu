@@ -60,7 +60,7 @@ public final class XerionPatch {
         }
     }
 
-    /** True when apk carries this patcher's speed library; false for an older patcher's (or none). */
+    /** True when apk carries this patcher's speed library and manifest edits; false for an older patcher's (or none). */
     public static boolean isCurrent(File apk, Files files) throws IOException {
         boolean any = false;
         try (ZipFile zip = new ZipFile(apk)) {
@@ -74,6 +74,8 @@ public final class XerionPatch {
                 if (crc.getValue() != entry.getCrc()) return false;
                 any = true;
             }
+            byte[] manifest = read(zip.getInputStream(zip.getEntry("AndroidManifest.xml")));
+            if (AxmlEdit.allowOverlay(manifest) != manifest) return false; // patched before the drawer (no overlay permission)
         }
         return any;
     }
@@ -95,6 +97,12 @@ public final class XerionPatch {
                     byte[] engine = new byte[(int) entry.getSize()]; // 68 MB: exactly once, not a growing buffer
                     try (DataInputStream data = new DataInputStream(in.getInputStream(entry))) { data.readFully(engine); }
                     put(zip, name, patchEngine(engine, name), entry.getMethod());
+                    continue;
+                }
+                if (name.equals("AndroidManifest.xml")) {
+                    try (InputStream data = in.getInputStream(entry)) {
+                        put(zip, name, AxmlEdit.allowOverlay(read(data)), entry.getMethod());
+                    }
                     continue;
                 }
                 ZipEntry same = new ZipEntry(name);
