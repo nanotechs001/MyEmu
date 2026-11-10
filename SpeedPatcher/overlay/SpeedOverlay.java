@@ -2,7 +2,10 @@ package com.myemu.speed;
 
 import android.app.Activity;
 import android.content.Context;
+import android.app.PendingIntent;
 import android.app.PictureInPictureParams;
+import android.app.RemoteAction;
+import android.graphics.drawable.Icon;
 import android.util.Rational;
 import android.widget.Toast;
 import android.app.Application;
@@ -1090,8 +1093,7 @@ public final class SpeedOverlay implements Application.ActivityLifecycleCallback
         static void hide(Activity activity) {
             closePanel(activity);
             try {
-                if (!activity.enterPictureInPictureMode(new PictureInPictureParams.Builder()
-                        .setAspectRatio(new Rational(16, 9)).build())) throw new IllegalStateException("refused");
+                if (!activity.enterPictureInPictureMode(params(activity))) throw new IllegalStateException("refused");
                 small = activity;
                 woken = false;
                 hiddenAt = SystemClock.uptimeMillis();
@@ -1100,6 +1102,24 @@ public final class SpeedOverlay implements Application.ActivityLifecycleCallback
                 Log.w(TAG, "drawer: no picture-in-picture", e);
                 Toast.makeText(activity, "Can't minimize: open the Speed Patcher and tap Update speed patch", Toast.LENGTH_LONG).show();
             }
+        }
+
+        // The window has the game's own shape (so none of it is cut off) and a Full screen button:
+        // a tap on the small window only shows its controls.
+        private static PictureInPictureParams params(Activity activity) {
+            View decor = activity.getWindow().getDecorView();
+            int w = Math.max(decor.getWidth(), decor.getHeight()), h = Math.max(1, Math.min(decor.getWidth(), decor.getHeight()));
+            Rational shape = w * 100 > h * 239 ? new Rational(239, 100) : new Rational(Math.max(w, h), h); // Android's widest
+            Intent launch = activity.getPackageManager().getLaunchIntentForPackage(activity.getPackageName());
+            PictureInPictureParams.Builder params = new PictureInPictureParams.Builder().setAspectRatio(shape);
+            if (launch != null) {
+                launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                PendingIntent full = PendingIntent.getActivity(activity, 0, launch,
+                    PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+                params.setActions(java.util.Collections.singletonList(new RemoteAction(
+                    Icon.createWithResource("android", android.R.drawable.ic_menu_zoom), "Full screen", "Back to full screen", full)));
+            }
+            return params.build();
         }
 
         // The game paused itself (and its GL thread) on shrinking: keep it drawing, and so playing.
