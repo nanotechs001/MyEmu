@@ -1,6 +1,8 @@
 package com.myemu.speed;
 
 import android.app.Activity;
+import android.app.ActivityOptions;
+import android.app.AlarmManager;
 import android.content.Context;
 import android.app.PendingIntent;
 import android.app.PictureInPictureParams;
@@ -884,8 +886,11 @@ public final class SpeedOverlay implements Application.ActivityLifecycleCallback
 
         private static long blackSince;
 
-        // Start the game over: a fresh task for its launcher activity, then end this (frozen) process.
-        // Allowed because the game is in front; Android starts the new activity in a new process.
+        // Start the game over: end this (frozen) process and have an alarm open the game again in a new
+        // one. (Starting it before exiting doesn't work: the new screen lives in this process, and
+        // Android drops a screen that dies before saving its state, leaving the home screen.) Android
+        // holds alarms back ~5 s. The game may draw over other apps, which lets the alarm open it from
+        // the background; from Android 15 the game must also opt in when making the alarm's intent.
         private static void relaunch(Activity activity, String why) {
             Intent launch = activity.getPackageManager().getLaunchIntentForPackage(activity.getPackageName());
             if (launch == null || launch.getComponent() == null) return;
@@ -893,8 +898,15 @@ public final class SpeedOverlay implements Application.ActivityLifecycleCallback
             Log.i(TAG, "watchdog: restarting the game (" + why + ")");
             Intent restart = Intent.makeRestartActivityTask(launch.getComponent());
             main.post(() -> {
-                activity.startActivity(restart);
-                main.postDelayed(() -> Runtime.getRuntime().exit(0), 500);
+                Bundle options = null;
+                if (Build.VERSION.SDK_INT >= 35) options = ActivityOptions.makeBasic()
+                    .setPendingIntentCreatorBackgroundActivityStartMode(ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED)
+                    .toBundle();
+                PendingIntent open = PendingIntent.getActivity(activity, 7, restart,
+                    PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT, options);
+                activity.getSystemService(AlarmManager.class).setAndAllowWhileIdle(
+                    AlarmManager.ELAPSED_REALTIME_WAKEUP, SystemClock.elapsedRealtime() + 1000, open);
+                main.postDelayed(() -> Runtime.getRuntime().exit(0), 300);
             });
         }
 
